@@ -4,7 +4,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "/home/ty/Repositories/ai_workspace/eml-mcp",
+        "/your/path/to/eml-mcp",
         "run",
         "server.py"
       ]

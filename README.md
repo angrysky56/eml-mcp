@@ -72,7 +72,7 @@ The core engine uses `complex128` throughout — trigonometric functions and π 
 ## Related
 
 - [SymbolicRegressionPackage](https://github.com/VA00/SymbolicRegressionPackage) — Odrzywołek's original EML toolkit
-- [hybrid-ai-mcp](../hybrid-ai-mcp) — Boolean-domain companion (McCulloch-Pitts neurons, NAND logic)
+- [hybrid-ai-mcp](https://github.com/angrysky56/hybrid-ai-mcp) — Boolean-domain companion (McCulloch-Pitts neurons, NAND logic)
 - [mcp-logic](https://github.com/angrysky56) — Automated reasoning server for verifying EML identities
 
 ## License
