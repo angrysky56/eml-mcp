@@ -91,9 +91,10 @@ def eml_array(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 class NodeType(str, Enum):
     """Types of nodes in an EML expression tree."""
-    CONST = "const"      # Terminal: constant 1
-    VAR = "var"          # Terminal: input variable
-    EML = "eml"          # Internal: eml(left, right)
+
+    CONST = "const"  # Terminal: constant 1
+    VAR = "var"  # Terminal: input variable
+    EML = "eml"  # Internal: eml(left, right)
 
 
 @dataclass
@@ -105,11 +106,12 @@ class EMLNode:
     Every elementary function expression is a binary tree of
     identical EML nodes — like a circuit of NAND gates.
     """
+
     node_type: NodeType
-    value: complex | None = None        # For CONST nodes
-    var_name: str | None = None         # For VAR nodes
-    left: EMLNode | None = None         # Left child (exp input)
-    right: EMLNode | None = None        # Right child (ln input)
+    value: complex | None = None  # For CONST nodes
+    var_name: str | None = None  # For VAR nodes
+    left: EMLNode | None = None  # Left child (exp input)
+    right: EMLNode | None = None  # Right child (ln input)
 
     def evaluate(self, variables: dict[str, complex] | None = None) -> complex:
         """Evaluate this EML tree with given variable bindings."""
@@ -235,9 +237,9 @@ def build_ln_tree() -> EMLNode:
     Equivalent to: e - ln(exp(e) / x) = ln(x)
     This is equation (5) from the paper.
     """
-    inner = eml_node(_1(), _x())            # eml(1, x) = e - ln(x)
-    middle = eml_node(inner, _1())           # eml(eml(1,x), 1) = exp(e - ln(x))
-    return eml_node(_1(), middle)            # eml(1, ...) = e - ln(exp(e-ln(x)))
+    inner = eml_node(_1(), _x())  # eml(1, x) = e - ln(x)
+    middle = eml_node(inner, _1())  # eml(eml(1,x), 1) = exp(e - ln(x))
+    return eml_node(_1(), middle)  # eml(1, ...) = e - ln(exp(e-ln(x)))
 
 
 def build_zero_tree() -> EMLNode:
@@ -246,7 +248,7 @@ def build_zero_tree() -> EMLNode:
     ln(1) = eml(1, eml(eml(1, 1), 1))
     Trace: eml(1,1)=e, eml(e,1)=exp(e), eml(1,exp(e))=e-ln(exp(e))=e-e=0
     """
-    return build_ln_from_subtree(_1())        # ln(1) = 0
+    return build_ln_from_subtree(_1())  # ln(1) = 0
 
 
 def build_ln_from_subtree(subtree: EMLNode) -> EMLNode:
@@ -277,8 +279,8 @@ def build_subtract_tree() -> EMLNode:
     Set b = exp(y) so ln(b) = y.
     Then eml(ln(x), exp(y)) = x - y.
     """
-    left = build_ln_from_subtree(var("x"))     # ln(x)
-    right = build_exp_from_subtree(var("y"))   # exp(y)
+    left = build_ln_from_subtree(var("x"))  # ln(x)
+    right = build_exp_from_subtree(var("y"))  # exp(y)
     return eml_node(left, right)
 
 
@@ -290,8 +292,8 @@ def build_negate_tree() -> EMLNode:
     Works in IEEE754 via inf and signed zeros.
     """
     zero = build_zero_tree()
-    left = build_ln_from_subtree(zero)         # ln(0) = -inf
-    right = build_exp_from_subtree(var("x"))   # exp(x)
+    left = build_ln_from_subtree(zero)  # ln(0) = -inf
+    right = build_exp_from_subtree(var("x"))  # exp(x)
     return eml_node(left, right)
 
 
@@ -329,9 +331,7 @@ def build_multiply_tree() -> EMLNode:
     neg_lny_right = build_exp_from_subtree(ln_y)
     neg_lny = eml_node(neg_lny_left, neg_lny_right)  # -(ln(y))
 
-    sum_left = build_ln_from_subtree(ln_x)             # ln(ln(x))... no
-    # Actually: a - (-b) = eml(ln(a), exp(-b))
-    # a + b = eml(ln(a), exp(eml(ln(0), exp(b))))
+    # a + b = a - (-b) = eml(ln(a), exp(-b))
     # Here a = ln(x), b = ln(y)
     add_left = build_ln_from_subtree(ln_x)
     add_right = build_exp_from_subtree(neg_lny)
@@ -348,57 +348,58 @@ KNOWN_FORMULAS: dict[str, dict[str, Any]] = {
         "description": "Exponential function exp(x)",
         "builder": build_exp_tree,
         "depth": 1,
-        "leaf_count": 3,
+        "leaf_count": 2,
         "variables": ["x"],
     },
     "e": {
         "description": "Euler's number e ≈ 2.71828",
         "builder": build_e_tree,
         "depth": 1,
-        "leaf_count": 3,
+        "leaf_count": 2,
         "variables": [],
     },
     "ln": {
         "description": "Natural logarithm ln(x)",
         "builder": build_ln_tree,
         "depth": 3,
-        "leaf_count": 7,
+        "leaf_count": 4,
         "variables": ["x"],
     },
     "zero": {
-        "description": "Constant 0 = ln(e)",
+        "description": "Constant 0 = ln(1)",
         "builder": build_zero_tree,
-        "depth": 4,
-        "leaf_count": 7,
+        "depth": 3,
+        "leaf_count": 4,
         "variables": [],
     },
     "subtract": {
         "description": "Subtraction x - y = eml(ln(x), exp(y))",
         "builder": build_subtract_tree,
-        "depth": 5,
-        "leaf_count": 11,
+        "depth": 4,
+        "leaf_count": 6,
         "variables": ["x", "y"],
     },
     "negate": {
         "description": "Negation -x = 0 - x (uses extended reals: ln(0)=-∞)",
         "builder": build_negate_tree,
-        "depth": 9,
-        "leaf_count": 15,
+        "depth": 7,
+        "leaf_count": 9,
         "variables": ["x"],
     },
     "add": {
         "description": "Addition x + y = x - (0 - y)",
         "builder": build_add_tree,
-        "depth": 13,
-        "leaf_count": 19,
+        "depth": 9,
+        "leaf_count": 14,
         "variables": ["x", "y"],
     },
     "multiply": {
         "description": "Multiplication x × y = exp(ln(x) + ln(y))",
         "builder": build_multiply_tree,
-        "depth": 17,
-        "leaf_count": 41,
+        "depth": 10,
+        "leaf_count": 21,
         "variables": ["x", "y"],
+        "note": "Compiler path K=21; paper's direct search finds K=17",
     },
 }
 
@@ -434,8 +435,8 @@ def build_master_tree(depth: int, var_names: list[str] | None = None) -> dict[st
     if var_names is None:
         var_names = ["x"]
 
-    n_leaves = 2 ** depth
-    n_internal = 2 ** depth - 1
+    n_leaves = 2**depth
+    n_internal = 2**depth - 1
     # At leaves: alpha + beta per variable = 1 + len(var_names) params per leaf
     # At internal: alpha + beta per variable + gamma = 2 + len(var_names) params
     leaf_params = n_leaves * (1 + len(var_names))
@@ -507,19 +508,24 @@ def verify_eml_identity(
             ref_val = complex(reference_fn(point))
             error = abs(tree_val - ref_val)
             max_error = max(max_error, error)
-            results.append({
-                "input": extract_real(point),
-                "tree_output": extract_real(tree_val),
-                "reference": extract_real(ref_val),
-                "error": error,
-                "pass": error < tolerance,
-            })
+            results.append(
+                {
+                    "input": extract_real(point),
+                    "tree_output": extract_real(tree_val),
+                    "reference": extract_real(ref_val),
+                    "error": error,
+                    "pass": error < tolerance,
+                }
+            )
         except (ValueError, ZeroDivisionError, OverflowError) as e:
-            results.append({
-                "input": extract_real(point),
-                "error": str(e),
-                "pass": False,
-            })
+            results.append(
+                {
+                    "input": extract_real(point),
+                    "error": str(e),
+                    # trunk-ignore(bandit/B105)
+                    "pass": False,
+                }
+            )
 
     passed = all(r["pass"] for r in results)
     return {

@@ -32,13 +32,17 @@ from eml_core import (
     KNOWN_FORMULAS,
     EMLNode,
     NodeType,
+    build_add_tree,
+    build_e_tree,
     build_exp_from_subtree,
     build_exp_tree,
     build_ln_from_subtree,
     build_ln_tree,
     build_master_tree,
+    build_multiply_tree,
+    build_negate_tree,
+    build_subtract_tree,
     build_zero_tree,
-    build_e_tree,
     const,
     eml,
     eml_node,
@@ -93,19 +97,29 @@ def eml_evaluate(x: float, y: float):
         real_result = extract_real(result)
 
         return {
-            "result": real_result if isinstance(real_result, float) else {
-                "real": result.real, "imag": result.imag
-            },
+            "result": (
+                real_result
+                if isinstance(real_result, float)
+                else {"real": result.real, "imag": result.imag}
+            ),
             "formula": f"eml({x}, {y}) = exp({x}) - ln({y})",
             "components": {
-                "exp_x": extract_real(complex(math.e ** x) if abs(x) < 700 else complex(float("inf"))),
-                "ln_y": extract_real(complex(math.log(y)) if y > 0 else {"requires_complex": True}),
+                "exp_x": extract_real(
+                    complex(math.e**x) if abs(x) < 700 else complex(float("inf"))
+                ),
+                "ln_y": extract_real(
+                    complex(math.log(y)) if y > 0 else {"requires_complex": True}
+                ),
             },
             "explanation": (
-                f"exp({x}) = {math.exp(x):.6g}, "
-                f"ln({y}) = {math.log(y):.6g}, "
-                f"result = {real_result}"
-            ) if y > 0 and abs(x) < 700 else f"Result computed in complex domain: {result}",
+                (
+                    f"exp({x}) = {math.exp(x):.6g}, "
+                    f"ln({y}) = {math.log(y):.6g}, "
+                    f"result = {real_result}"
+                )
+                if y > 0 and abs(x) < 700
+                else f"Result computed in complex domain: {result}"
+            ),
         }
     except Exception as e:
         logger.error(f"Error evaluating EML: {e}")
@@ -266,6 +280,15 @@ def eml_compile(expression: str):
         "log(x)": "ln",
         "euler": "e",
         "0": "zero",
+        "x-y": "subtract",
+        "x - y": "subtract",
+        "-x": "negate",
+        "neg(x)": "negate",
+        "x+y": "add",
+        "x + y": "add",
+        "x*y": "multiply",
+        "x × y": "multiply",
+        "x * y": "multiply",
     }
     if expr in alias_map:
         key = alias_map[expr]
@@ -368,10 +391,18 @@ def eml_verify(
 
     # Define reference functions
     ref_functions = {
-        "exp": lambda z: complex(math.e ** z.real) if abs(z.real) < 700 else complex(float("inf")),
+        "exp": lambda z: (
+            complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf"))
+        ),
         "e": lambda _: complex(math.e),
-        "ln": lambda z: complex(math.log(z.real)) if z.real > 0 else complex(float("nan")),
+        "ln": lambda z: (
+            complex(math.log(z.real)) if z.real > 0 else complex(float("nan"))
+        ),
         "zero": lambda _: complex(0.0),
+        "subtract": lambda x, y: complex(x - y),
+        "negate": lambda z: complex(-z),
+        "add": lambda x, y: complex(x + y),
+        "multiply": lambda x, y: complex(x * y),
     }
 
     if formula_name not in ref_functions:
@@ -380,11 +411,60 @@ def eml_verify(
             "message": f"No reference function defined for '{formula_name}'",
         }
 
-    result = verify_eml_identity(
-        tree=tree,
-        reference_fn=ref_functions[formula_name],
-        tolerance=tolerance,
-    )
+    ref_fn = ref_functions[formula_name]
+    variables = info.get("variables", [])
+
+    # Handle multivariate formulas (two-variable: x, y)
+    if len(variables) == 2:
+        # Paired test points for binary operations
+        test_pairs = [
+            (complex(2.5), complex(1.3)),
+            (complex(0.5772156649015329), complex(1.6180339887498949)),
+            (complex(1.4142135623730951), complex(1.2824271291006226)),
+            (complex(3.0), complex(0.7)),
+            (complex(0.1), complex(2.0)),
+        ]
+        results = []
+        max_error = 0.0
+        for xv, yv in test_pairs:
+            try:
+                var_bindings = {"x": xv, "y": yv}
+                tree_val = tree.evaluate(var_bindings)
+                ref_val = complex(ref_fn(xv, yv))
+                error = abs(tree_val - ref_val)
+                max_error = max(max_error, error)
+                results.append(
+                    {
+                        "input": {"x": extract_real(xv), "y": extract_real(yv)},
+                        "tree_output": extract_real(tree_val),
+                        "reference": extract_real(ref_val),
+                        "error": error,
+                        "pass": error < tolerance,
+                    }
+                )
+            except (ValueError, ZeroDivisionError, OverflowError) as e:
+                results.append(
+                    {
+                        "input": {"x": extract_real(xv), "y": extract_real(yv)},
+                        "error": str(e),
+                        "pass": False,
+                    }
+                )
+        passed = all(r["pass"] for r in results)
+        result = {
+            "passed": passed,
+            "max_error": max_error,
+            "tolerance": tolerance,
+            "n_tests": len(results),
+            "details": results,
+        }
+    else:
+        # Univariate or constant — use existing verify_eml_identity
+        result = verify_eml_identity(
+            tree=tree,
+            reference_fn=ref_fn,
+            tolerance=tolerance,
+        )
 
     result["formula_name"] = formula_name
     result["eml_expression"] = tree.to_expression()
