@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "eml-mcp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/home/ty/Repositories/ai_workspace/eml-mcp",
+        "run",
+        "server.py"
+      ]
+    }
+  }
+}
