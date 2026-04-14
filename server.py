@@ -151,11 +151,14 @@ def eml_list_formulas():
         formulas[name] = {
             "description": info["description"],
             "depth": info["depth"],
-            "leaf_count": info["leaf_count"],
+            "K": info["K"],
+            "leaf_count": tree.leaf_count,
             "variables": info["variables"],
             "expression": tree.to_expression(),
             "rpn": " ".join(tree.to_rpn()),
         }
+        if "note" in info:
+            formulas[name]["note"] = info["note"]
     return {
         "formulas": formulas,
         "total": len(formulas),
@@ -206,11 +209,14 @@ def eml_tree_info(
         "description": info["description"],
         "expression": tree.to_expression(),
         "rpn": " ".join(tree.to_rpn()),
-        "rpn_length": tree.leaf_count,
         "depth": tree.depth,
+        "K": tree.node_count,
+        "leaf_count": tree.leaf_count,
         "node_count": tree.node_count,
         "tree": tree.to_dict(),
     }
+    if "note" in info:
+        result["note"] = info["note"]
 
     if evaluate_at is not None and info["variables"]:
         variables = {info["variables"][0]: complex(evaluate_at)}
@@ -268,6 +274,7 @@ def eml_compile(expression: str):
             "eml_expression": tree.to_expression(),
             "rpn": " ".join(tree.to_rpn()),
             "depth": tree.depth,
+            "K": tree.node_count,
             "leaf_count": tree.leaf_count,
             "tree": tree.to_dict(),
         }
@@ -298,6 +305,7 @@ def eml_compile(expression: str):
             "eml_expression": tree.to_expression(),
             "rpn": " ".join(tree.to_rpn()),
             "depth": tree.depth,
+            "K": tree.node_count,
             "leaf_count": tree.leaf_count,
             "tree": tree.to_dict(),
         }
@@ -344,6 +352,7 @@ def _compile_result(expression: str, tree: EMLNode):
         "eml_expression": tree.to_expression(),
         "rpn": " ".join(tree.to_rpn()),
         "depth": tree.depth,
+        "K": tree.node_count,
         "leaf_count": tree.leaf_count,
         "tree": tree.to_dict(),
     }

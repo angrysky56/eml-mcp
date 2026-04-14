@@ -136,14 +136,14 @@ class EMLNode:
 
     @property
     def leaf_count(self) -> int:
-        """Number of leaves (Kolmogorov complexity K)."""
+        """Number of terminal nodes (constants and variables)."""
         if self.node_type in (NodeType.CONST, NodeType.VAR):
             return 1
         return self.left.leaf_count + self.right.leaf_count
 
     @property
     def node_count(self) -> int:
-        """Total number of nodes in the tree."""
+        """Total nodes in the tree (paper's Kolmogorov complexity K = 2L-1)."""
         if self.node_type in (NodeType.CONST, NodeType.VAR):
             return 1
         return 1 + self.left.node_count + self.right.node_count
@@ -348,58 +348,61 @@ KNOWN_FORMULAS: dict[str, dict[str, Any]] = {
         "description": "Exponential function exp(x)",
         "builder": build_exp_tree,
         "depth": 1,
-        "leaf_count": 2,
+        "K": 3,
         "variables": ["x"],
     },
     "e": {
         "description": "Euler's number e ≈ 2.71828",
         "builder": build_e_tree,
         "depth": 1,
-        "leaf_count": 2,
+        "K": 3,
         "variables": [],
     },
     "ln": {
         "description": "Natural logarithm ln(x)",
         "builder": build_ln_tree,
         "depth": 3,
-        "leaf_count": 4,
+        "K": 7,
         "variables": ["x"],
     },
     "zero": {
         "description": "Constant 0 = ln(1)",
         "builder": build_zero_tree,
         "depth": 3,
-        "leaf_count": 4,
+        "K": 7,
         "variables": [],
     },
     "subtract": {
         "description": "Subtraction x - y = eml(ln(x), exp(y))",
         "builder": build_subtract_tree,
         "depth": 4,
-        "leaf_count": 6,
+        "K": 11,
         "variables": ["x", "y"],
+        "note": "Matches paper's direct search optimum (K=11)",
     },
     "negate": {
         "description": "Negation -x = 0 - x (uses extended reals: ln(0)=-∞)",
         "builder": build_negate_tree,
         "depth": 7,
-        "leaf_count": 9,
+        "K": 17,
         "variables": ["x"],
+        "note": "Paper direct search K=15; our compiler path K=17",
     },
     "add": {
         "description": "Addition x + y = x - (0 - y)",
         "builder": build_add_tree,
         "depth": 9,
-        "leaf_count": 14,
+        "K": 27,
         "variables": ["x", "y"],
+        "note": "Matches paper compiler K=27; direct search K=19",
     },
     "multiply": {
         "description": "Multiplication x × y = exp(ln(x) + ln(y))",
         "builder": build_multiply_tree,
         "depth": 10,
-        "leaf_count": 21,
+        "K": 41,
         "variables": ["x", "y"],
-        "note": "Compiler path K=21; paper's direct search finds K=17",
+        "note": "Matches paper compiler K=41; direct search K=17",
     },
 }
 
