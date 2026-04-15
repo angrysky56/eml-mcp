@@ -27,11 +27,10 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from eml_core import (
-    DTYPE,
+from eml_mcp.operator import DTYPE, eml
+from eml_mcp.trees import EMLNode, NodeType, const, eml_node, extract_real, var
+from eml_mcp.registry import (
     KNOWN_FORMULAS,
-    EMLNode,
-    NodeType,
     build_add_tree,
     build_e_tree,
     build_exp_from_subtree,
@@ -43,11 +42,6 @@ from eml_core import (
     build_negate_tree,
     build_subtract_tree,
     build_zero_tree,
-    const,
-    eml,
-    eml_node,
-    extract_real,
-    var,
     verify_eml_identity,
 )
 
@@ -604,16 +598,3 @@ def get_complexity_table() -> str:
 | x / y    | 105       | 17              |
 | x^y      | 49        | 25              |
 """.strip()
-
-
-# ==================== Main ====================
-
-if __name__ == "__main__":
-    try:
-        logger.info("Starting EML MCP server")
-        logger.info("EML: exp(x) - ln(y) — the continuous Sheffer operator")
-        mcp.run()
-    except KeyboardInterrupt:
-        logger.info("Server interrupted by user")
-    except Exception as e:
-        logger.error(f"Server error: {e}")
