@@ -191,7 +191,7 @@ def build_master_tree(depth: int, var_names: list[str] | None = None) -> dict[st
         "n_leaves": n_leaves,
         "n_internal_nodes": n_internal,
         "total_parameters": total_params,
-        "formula_paper": f"5×2^{depth} - 6 = {5 * (2 ** depth) - 6}",
+        "formula_paper": f"5×2^{depth} - 6 = {5 * (2**depth) - 6}",
         "variables": var_names,
         "description": (
             f"Level-{depth} master formula: a complete binary tree with "

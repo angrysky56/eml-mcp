@@ -101,9 +101,7 @@ def eml_evaluate(x: float, y: float):
                 "exp_x": extract_real(
                     complex(math.e**x) if abs(x) < 700 else complex(float("inf"))
                 ),
-                "ln_y": extract_real(
-                    complex(math.log(y)) if y > 0 else {"requires_complex": True}
-                ),
+                "ln_y": extract_real(complex(math.log(y)) if y > 0 else {"requires_complex": True}),
             },
             "explanation": (
                 (
@@ -394,13 +392,9 @@ def eml_verify(
 
     # Define reference functions
     ref_functions = {
-        "exp": lambda z: (
-            complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf"))
-        ),
+        "exp": lambda z: complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf")),
         "e": lambda _: complex(math.e),
-        "ln": lambda z: (
-            complex(math.log(z.real)) if z.real > 0 else complex(float("nan"))
-        ),
+        "ln": lambda z: complex(math.log(z.real)) if z.real > 0 else complex(float("nan")),
         "zero": lambda _: complex(0.0),
         "subtract": lambda x, y: complex(x - y),
         "negate": lambda z: complex(-z),
