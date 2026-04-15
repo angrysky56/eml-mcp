@@ -4,9 +4,9 @@
       "command": "uv",
       "args": [
         "--directory",
-        "/your/path/to/eml-mcp",
+        "/absolute/path/to/eml-mcp",
         "run",
-        "server.py"
+        "eml-mcp"
       ]
     }
   }

@@ -17,7 +17,7 @@ Paired with the constant `1`, this operator reconstructs arithmetic, all transce
   "mcpServers": {
     "eml-mcp": {
       "command": "uv",
-      "args": ["--directory", "/path/to/eml-mcp", "run", "server.py"]
+      "args": ["--directory", "/path/to/eml-mcp", "run", "eml-mcp"]
     }
   }
 }
@@ -147,9 +147,15 @@ EML is one instance of a **Minimal Generative Architecture (MGA)** — the same 
 ## Architecture
 
 ```
-eml_core.py    — EML operator, binary tree structures, known formulas, verification
-server.py      — FastMCP server exposing tools and resources
+src/eml_mcp/
+  ├── __init__.py    — Package exports
+  ├── __main__.py    — Package entry point
+  ├── primitives.py  — EML operator and safe arithmetic
+  ├── trees.py       — Binary tree structures and NodeType
+  ├── registry.py    — Formula builders and verification logic
+  └── server.py      — FastMCP server implementation
 ```
+
 
 The core engine uses `complex128` throughout — trigonometric functions and π require complex intermediates via Euler's formula. Works cleanly with NumPy and PyTorch.
 

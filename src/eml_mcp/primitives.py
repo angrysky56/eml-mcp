@@ -1,5 +1,5 @@
 """
-EML Operator — core arithmetic primitives.
+EML Primitives — core arithmetic functions.
 
 Implementation of the EML (Exp-Minus-Log) Sheffer operator and helper
 functions for complex domain safety.

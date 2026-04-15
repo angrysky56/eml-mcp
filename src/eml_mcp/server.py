@@ -27,8 +27,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from eml_mcp.operator import DTYPE, eml
-from eml_mcp.trees import EMLNode, NodeType, const, eml_node, extract_real, var
+from eml_mcp.primitives import DTYPE, eml
 from eml_mcp.registry import (
     KNOWN_FORMULAS,
     build_add_tree,
@@ -44,6 +43,7 @@ from eml_mcp.registry import (
     build_zero_tree,
     verify_eml_identity,
 )
+from eml_mcp.trees import EMLNode, NodeType, const, eml_node, extract_real, var
 
 # Logging to stderr for MCP
 logging.basicConfig(

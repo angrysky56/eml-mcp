@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from eml_mcp.operator import DTYPE, eml, _safe_exp, _safe_log
+from eml_mcp.primitives import DTYPE, _safe_exp, _safe_log, eml
 from eml_mcp.trees import (
     EMLNode,
     NodeType,

@@ -5,7 +5,7 @@ All elementary functions from a single binary operator, based on Odrzywołek (20
 Reference: https://arxiv.org/html/2603.21852v2
 """
 
-from eml_mcp.operator import DTYPE, EXP_CLAMP_MAX, EXP_CLAMP_MIN, eml, eml_array
+from eml_mcp.primitives import DTYPE, EXP_CLAMP_MAX, EXP_CLAMP_MIN, eml, eml_array
 from eml_mcp.trees import EMLNode, NodeType, const, eml_node, extract_real, var
 from eml_mcp.registry import (
     KNOWN_FORMULAS,
