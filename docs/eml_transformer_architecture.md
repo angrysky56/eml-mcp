@@ -500,9 +500,149 @@ If all match to $< 2.22 \times 10^{-16}$, the single-layer case is proved.
 
 ---
 
-## 9. Open Questions and Future Work
+## 9. Dynamic Depth via Mixture-of-Recursions
 
-### 9.1 Attention Routing: Self-Attention vs. Cross-Attention
+### 9.1 The Static Depth Problem
+
+The architecture in §5-§8 compiles EML trees into a fixed number of physical
+layers: $\lceil D/2 \rceil$ layers for depth-$D$ trees. This creates two
+inefficiencies:
+
+1. **Over-provisioning:** If a model must handle both exp(x) (depth 1) and
+   x×y (depth 10), it needs 5 layers — but exp(x) wastes 4 of them.
+2. **No scalability:** Adding new functions (e.g., trigonometric, requiring
+   depth 8+) demands more physical layers, increasing parameter count.
+
+### 9.2 MoR as the Solution
+
+Mixture-of-Recursions (Bae et al. 2025) provides exactly the missing
+component: a shared layer block that loops a variable number of times per
+token, with learned routers determining the loop count.
+
+**The critical reframing:** Instead of compiling an EML tree into $\lceil D/2 \rceil$
+*distinct* layers, compile it into **one physical EML block** that *recurses*
+$D$ times. The MoR router controls how many recursions each token receives.
+
+### 9.3 Revised Architecture: EML-MoR Transformer
+
+```
+┌─────────────────────────────────────────────┐
+│  Embedding Layer (unique, non-shared)       │
+│  Maps input tokens → slot vectors           │
+├─────────────────────────────────────────────┤
+│                                             │
+│  ┌─────────────────────────────────────┐    │
+│  │  MoR Router                         │    │
+│  │  Determines recursion depth r ∈     │    │
+│  │  {1, ..., N_r} per token            │    │
+│  └────────────┬────────────────────────┘    │
+│               │                             │
+│  ┌────────────▼────────────────────────┐    │
+│  │  EML Recursion Block (SHARED)       │◄─┐ │
+│  │                                     │  │ │
+│  │  Half-step A: Attention routing     │  │ │
+│  │   (permute slots for next eml node) │  │ │
+│  │                                     │  │ │
+│  │  Half-step B: EML FFN              │  │ │
+│  │   exp(slot_a) - ln(slot_b)         │  │ │
+│  │   → write to target slot           │  │ │
+│  │                                     │  │ │
+│  └────────────┬────────────────────────┘  │ │
+│               │                           │ │
+│               └── loop r times ───────────┘ │
+│                                             │
+├─────────────────────────────────────────────┤
+│  Output Layer (unique, non-shared)          │
+│  Reads result slot → output                 │
+└─────────────────────────────────────────────┘
+```
+
+This is the "Middle-Cycle" strategy from MoR: unique first/last layers,
+shared middle block. The EML recursion block contains exactly one
+attention half-step and one EML FFN half-step.
+
+### 9.4 Component Mapping
+
+| MoR Component              | EML-Transformer Role                      |
+|----------------------------|-------------------------------------------|
+| Shared recursion block     | EML ALU: compute exp(a) - ln(b)           |
+| Router score $g_t^r$       | EML tree depth for this token's formula   |
+| $N_r$ (max recursions)     | Maximum supported EML depth               |
+| Hierarchical filtering     | Natural: deeper EML nodes need parents    |
+| Recursion-wise KV cache    | Only cache live variable slots per depth   |
+| Depth-wise batching        | Tokens at different EML stages share ALU   |
+
+### 9.5 Efficiency Analysis
+
+**Parameters:** The EML recursion block has $3d$ parameters per half-step
+(three sparse vectors: $W_{\exp}$, $W_{\ln}$, $W_{\text{out}}$). Since the
+block is shared, total EML parameters = $3d$ regardless of max recursion
+depth. Compare to the static architecture: $3d \cdot \lceil D/2 \rceil$.
+
+**Saving factor:** $\lceil D_{\max}/2 \rceil \times$ fewer EML parameters.
+For multiplication ($D=10$): 5× reduction.
+
+**FLOPs per token:** A token requiring depth $r$ uses $r$ cycles through
+the block. Expert-choice routing with hierarchical filtering ensures only
+tokens that need depth $r$ pay for it. Tokens computing exp(x) (depth 1)
+exit after one cycle.
+
+**KV cache:** Recursion-wise caching stores KV only for tokens active at
+each depth. At depth 10 (multiplication), only the fraction of tokens
+actually computing multiplication retain cache entries. Memory scales as
+$(N_r + 1) / 2N_r$ of the static architecture.
+
+**Throughput:** Continuous depth-wise batching (from MoR §3.3) allows tokens
+at different recursion depths to share the same batch. MoR reports 2.06×
+throughput at $N_r = 4$. For the EML-Transformer, this means tokens
+computing different formulas (different depths) execute concurrently on
+the same hardware.
+
+### 9.6 Router Design for Compiled EML
+
+Two modes of operation:
+
+**Mode A — Fully compiled (deterministic router):**
+The router is not learned but analytically set. Given the EML tree for the
+current operation, the compiler hardcodes the recursion depth. This is the
+pure "compiled computer" mode — zero training, fully deterministic.
+
+Router weight construction:
+$$g_t^r = \begin{cases} 1 & \text{if } r \leq D_{\text{formula}} \\ 0 & \text{otherwise} \end{cases}$$
+
+**Mode B — Hybrid learned + compiled (adaptive router):**
+For integration with a language model (§10.3), the router is trained to
+recognize which tokens require exact EML computation and how deep. Language
+tokens get $r = 0$ (skip EML block entirely). Mathematical tokens get
+$r = D_{\text{formula}}$. The router learns this allocation from data,
+following MoR's standard training procedure with expert-choice routing.
+
+This is where MoR's MOP connection becomes concrete: the router implements
+the α/β tradeoff from the Maximum Occupancy Principle. High-β tokens (complex
+math, novel computation) get more recursion cycles. Low-β tokens (common
+language, simple predictions) exit early. The balancing loss prevents the
+absorbing state of all tokens consuming maximum depth.
+
+### 9.7 Impact on Falsification Protocol
+
+The primary prediction from §7 must be updated:
+
+**Revised Claim:** An EML-MoR transformer with ONE physical EML block,
+maximum recursion depth $N_r = D_{\max}$, and width $d_{\min}$ computes any
+elementary function of depth $D \leq D_{\max}$ to within $D \times \text{ULP}$
+of the reference, using exactly $D$ recursion cycles through the shared block.
+
+**New efficiency prediction:** The EML-MoR transformer uses $\lceil D_{\max}/2 \rceil$
+fewer parameters than the static EML-Transformer for the same computational
+coverage, with equivalent precision.
+
+**New throughput prediction:** Continuous depth-wise batching yields $\geq 1.5\times$
+throughput over the static architecture when processing mixed-depth formulas
+concurrently, following MoR's empirical results.
+
+## 10. Open Questions and Future Work
+
+### 10.1 Attention Routing: Self-Attention vs. Cross-Attention
 
 The transformer-vm uses self-attention for routing within a single sequence.
 For EML, all values exist in the same residual stream (no cross-sequence
@@ -519,7 +659,7 @@ architecture reduces to: **permute → eml → permute → eml → ... → read*
 This would be even simpler than a transformer — it's a feed-forward network
 with a custom activation function and skip connections.
 
-### 9.2 Complex Arithmetic
+### 10.2 Complex Arithmetic
 
 EML requires complex intermediates (trigonometric functions, $\pi$, $i$ all
 emerge via $\ln(-1)$). The architecture must use $\mathbb{C}^d$ residual
@@ -527,7 +667,7 @@ streams, not $\mathbb{R}^d$. This doubles the effective width. PyTorch
 supports `torch.complex128` natively, but attention softmax on complex
 scores needs care — use $\text{Re}(QK^\top)$ for score computation.
 
-### 9.3 Integration with Learned Transformers
+### 10.3 Integration with Learned Transformers
 
 The ultimate goal: a hybrid model where a small block of EML-compiled layers
 handles exact math while the rest does standard language processing. Two
@@ -544,7 +684,7 @@ pass through (identity). When exact computation is triggered, they activate.
 Pattern A is simpler; pattern B is what Moran's article envisions as
 "dual-mode" (deterministic compiled + probabilistic learned).
 
-### 9.4 Connection to MGA Framework
+### 10.4 Connection to MGA Framework
 
 This architecture instantiates the Minimal Generative Architecture pattern
 at a new level. The MGA table from the synthesis page now has a concrete
@@ -558,7 +698,7 @@ implementation path for L-1 (computational substrate):
 | Emergent domain     | All elementary functions                  |
 | Compiler            | §6 pipeline: schedule → allocate → construct|
 
-### 9.5 Connection to AlphaEvolve
+### 10.5 Connection to AlphaEvolve
 
 The compilation pipeline in §6 produces correct but *unoptimized* EML programs
 (compiler K vs. direct search K — e.g., multiply: 41 vs. 17). AlphaEvolve's
@@ -570,7 +710,7 @@ which are then compiled into optimal transformer weights.
 
 ---
 
-## 10. Implementation Roadmap
+## 11. Implementation Roadmap
 
 ### Phase 1: Depth-1 PoC (exp(x))
 
@@ -578,22 +718,31 @@ Manually construct the weight tensors from §8.2 in PyTorch. Verify against
 reference on transcendental test points. If this passes, the core mechanism
 is proven. **Estimated effort:** ~100 lines of PyTorch.
 
-### Phase 2: Compiler Passes (schedule, allocate, construct)
+### Phase 2: Static Compiler Passes (schedule, allocate, construct)
 
 Implement the three-pass pipeline from §6 as a new tool `eml_compile_transformer`
 in the eml-mcp server. Input: any `EMLNode` tree. Output: `torch.nn.Module`
 with analytically constructed weights. **Estimated effort:** ~300 lines.
 
-### Phase 3: Full Formula Suite
+### Phase 3: Full Formula Suite (Static)
 
 Compile all 8 verified formulas. Run the falsification protocol from §7.
 Produce the comparison table of compiled-transformer output vs. `eml_verify`
-reference values. **This is the publishable result.**
+reference values. **This is the first publishable result.**
 
-### Phase 4: Hybrid Architecture Sketch
+### Phase 4: MoR Integration
 
-Design the side-channel integration (§9.3A) for a language model to delegate
-exact math to the compiled EML block. This is architectural design only —
+Replace the static $\lceil D/2 \rceil$-layer architecture with a single
+shared EML block wrapped in MoR's recursion framework (§9). Implement
+deterministic router (Mode A) first, then explore learned router (Mode B).
+Verify that the MoR variant matches the static architecture's precision
+on all 8 formulas while using $\lceil D_{\max}/2 \rceil \times$ fewer
+parameters. **This is the second publishable result.**
+
+### Phase 5: Hybrid Architecture Sketch
+
+Design the side-channel integration (§10.3) for a language model to delegate
+exact math to the compiled EML-MoR block. This is architectural design only —
 implementation requires access to a trained language model's internals.
 
 ---
@@ -606,6 +755,8 @@ implementation requires access to a trained language model's internals.
   Towards Data Science. Code: github.com/sjmoran/transformer-vm
 - Percepta (2026). "Constructing an LLM Computer."
   percepta.ai/blog/constructing-llm-computer
+- Bae, S. et al. (2025). "Mixture-of-Recursions: Learning Dynamic Recursive
+  Depths for Adaptive Token-Level Computation." arXiv:2507.10524v3.
 - Chaitin, G. (1981). "Register allocation and spilling via graph coloring."
   ACM SIGPLAN Notices.
 - Poletto, M. & Sarkar, V. (1999). "Linear scan register allocation."
