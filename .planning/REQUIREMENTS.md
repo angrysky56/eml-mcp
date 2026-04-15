@@ -39,6 +39,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **DISC-03**: Discovery engine persists verified formulas to DB with full provenance
 - [ ] **DISC-04**: Discovery engine tracks complexity (K = leaf count) and prefers shorter trees when multiple derivations exist
 - [ ] **DISC-05**: Discovery engine can be invoked via MCP tool to explore the formula space on demand
+- [ ] **DISC-06**: Discovery engine preserves and persists mathematically valid but non-target emergent formulas (Novelty Search)
 
 ### MCP Tools
 
