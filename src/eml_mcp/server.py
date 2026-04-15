@@ -19,7 +19,6 @@ Tools:
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import sys
@@ -27,23 +26,17 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from eml_mcp.primitives import DTYPE, eml
+from eml_mcp.primitives import eml
 from eml_mcp.registry import (
     KNOWN_FORMULAS,
-    build_add_tree,
-    build_e_tree,
     build_exp_from_subtree,
     build_exp_tree,
     build_ln_from_subtree,
     build_ln_tree,
     build_master_tree,
-    build_multiply_tree,
-    build_negate_tree,
-    build_subtract_tree,
-    build_zero_tree,
     verify_eml_identity,
 )
-from eml_mcp.trees import EMLNode, NodeType, const, eml_node, extract_real, var
+from eml_mcp.trees import EMLNode, extract_real
 
 # Logging to stderr for MCP
 logging.basicConfig(

@@ -4,17 +4,14 @@ EML binary tree structures — EMLNode, NodeType, and factory functions.
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from enum import Enum
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-import numpy as np
-
-from eml_mcp.primitives import DTYPE, _safe_exp, _safe_log
+from eml_mcp.primitives import _safe_exp, _safe_log
 
 
-class NodeType(str, Enum):
+class NodeType(StrEnum):
     """Types of nodes in an EML expression tree."""
 
     CONST = "const"  # Terminal: constant 1

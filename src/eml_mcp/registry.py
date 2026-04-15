@@ -4,18 +4,12 @@ EML formula registry — builder functions, KNOWN_FORMULAS, and numerical verifi
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
-import numpy as np
-
-from eml_mcp.primitives import DTYPE, _safe_exp, _safe_log, eml
 from eml_mcp.trees import (
     EMLNode,
-    NodeType,
     _1,
     _x,
-    const,
     eml_node,
     extract_real,
     var,

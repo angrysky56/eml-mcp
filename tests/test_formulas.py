@@ -9,10 +9,8 @@ Verifies:
 
 from __future__ import annotations
 
-import cmath
 import math
 
-import numpy as np
 import pytest
 
 from eml_mcp.primitives import eml
@@ -28,7 +26,7 @@ from eml_mcp.registry import (
     build_zero_tree,
     verify_eml_identity,
 )
-from eml_mcp.trees import EMLNode, const, var
+from eml_mcp.trees import EMLNode
 
 # ---------------------------------------------------------------------------
 # Transcendental test points (algebraically independent under Schanuel)
