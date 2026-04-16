@@ -20,11 +20,10 @@ Tools:
 
 from __future__ import annotations
 
-import ast
 import json
 import logging
 import math
-import operator
+import os
 import sys
 from typing import Any
 
@@ -32,12 +31,14 @@ from fastmcp import FastMCP
 
 from eml_mcp.compiler import EMLCompiler
 from eml_mcp.database import EMLFormulaDB
-from eml_mcp.discovery import DiscoveryEngine
+from eml_mcp.discovery import DiscoveryEngine, safe_eval_math
 from eml_mcp.primitives import eml
 from eml_mcp.registry import (
     build_master_tree,
     verify_eml_identity,
 )
+from eml_mcp.similarity import tree_edit_distance
+from eml_mcp.simplifier import simplify_tree
 from eml_mcp.trees import EMLNode, extract_real
 
 try:
@@ -60,118 +61,19 @@ logger = logging.getLogger(__name__)
 # Initialize MCP server
 mcp = FastMCP("eml-mcp")
 
-# Database singleton
-_db: EMLFormulaDB | None = None
+
+class DBInstance:
+    """Holding class for the database singleton."""
+
+    instance: EMLFormulaDB | None = None
 
 
 def get_db() -> EMLFormulaDB:
-    """Get or create the database singleton."""
-    global _db
-    if _db is None:
-        _db = EMLFormulaDB()
-    return _db
-
-
-def safe_eval_math(expression: str, x: complex) -> complex:
-    """Safely evaluate a mathematical expression using AST walking.
-
-    Acts as a 'Feature Filter' to ensure the target expression is within
-    the engine's mathematical domain.
-    """
-    import cmath
-
-    # Explicit whitelist of allowed operations
-    operators = {
-        ast.Add: operator.add,
-        ast.Sub: operator.sub,
-        ast.Mult: operator.mul,
-        ast.Div: operator.truediv,
-        ast.Pow: operator.pow,
-        ast.USub: operator.neg,
-        ast.UAdd: lambda v: v,
-    }
-
-    # Highly inclusive library of math/cmath primitives
-    functions = {
-        # Exponential/Log
-        "exp": cmath.exp,
-        "log": cmath.log,
-        "ln": cmath.log,
-        "log10": cmath.log10,
-        "sqrt": cmath.sqrt,
-        # Trig
-        "sin": cmath.sin,
-        "cos": cmath.cos,
-        "tan": cmath.tan,
-        "asin": cmath.asin,
-        "acos": cmath.acos,
-        "atan": cmath.atan,
-        # Hyperbolic
-        "sinh": cmath.sinh,
-        "cosh": cmath.cosh,
-        "tanh": cmath.tanh,
-        # Other
-        "abs": abs,
-        "phase": cmath.phase,
-        "polar": cmath.polar,
-        "rect": cmath.rect,
-    }
-
-    # Allowed variables and constants
-    constants = {
-        "x": x,
-        "pi": math.pi,
-        "e": math.e,
-        "tau": getattr(math, "tau", 6.283185307179586),
-        "j": 1j,
-    }
-
-    def _eval(node):
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
-        elif isinstance(node, ast.BinOp):
-            return operators[type(node.op)](_eval(node.left), _eval(node.right))
-        elif isinstance(node, ast.UnaryOp):
-            return operators[type(node.op)](_eval(node.operand))
-        elif isinstance(node, ast.Call):
-            name = ""
-            if isinstance(node.func, ast.Name):
-                name = node.func.id
-            elif isinstance(node.func, ast.Attribute):
-                name = node.func.attr
-
-            if name not in functions:
-                raise ValueError(
-                    f"Function '{name}' is not in the system's supported mathematical domain."
-                )
-            return functions[name](*[_eval(arg) for arg in node.args])
-        elif isinstance(node, ast.Name):
-            if node.id in constants:
-                return constants[node.id]
-            if node.id in ("math", "cmath"):
-                return node.id
-            raise ValueError(f"Reference '{node.id}' is not a recognized constant or variable.")
-        elif isinstance(node, ast.Constant):
-            return complex(node.value)
-        elif isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id in ("math", "cmath"):
-                if node.attr in functions:
-                    return functions[node.attr]
-                if node.attr in constants:
-                    return constants[node.attr]
-            raise ValueError(f"Attribute access '.{node.attr}' is restricted.")
-        else:
-            raise TypeError(
-                f"Expression uses '{type(node).__name__}' which is outside the system's focus."
-            )
-
-    try:
-        tree = ast.parse(expression, mode="eval")
-        return complex(_eval(tree))
-    except Exception as e:
-        if isinstance(e, ValueError | TypeError):
-            raise e
-        raise ValueError(f"Could not calculate expression: {e}") from e
+    """Singleton getter for the formula database."""
+    if DBInstance.instance is None:
+        db_path = os.environ.get("EML_DB_PATH", "eml_formulas.db")
+        DBInstance.instance = EMLFormulaDB(db_path)
+    return DBInstance.instance
 
 
 # ==================== MCP Tools ====================
@@ -218,7 +120,9 @@ def eml_evaluate(x: float, y: float):
                 "exp_x": extract_real(
                     complex(math.e**x) if abs(x) < 700 else complex(float("inf"))
                 ),
-                "ln_y": extract_real(complex(math.log(y)) if y > 0 else {"requires_complex": True}),
+                "ln_y": extract_real(
+                    complex(math.log(y)) if y > 0 else {"requires_complex": True}
+                ),
             },
             "explanation": (
                 (
@@ -231,7 +135,9 @@ def eml_evaluate(x: float, y: float):
             ),
         }
     except (OverflowError, ValueError, ZeroDivisionError, ArithmeticError) as e:
-        logger.error("EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True)
+        logger.error(
+            "EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True
+        )
         return {"status": "error", "message": str(e)}
 
 
@@ -263,6 +169,7 @@ def eml_discover(
         iterations: Number of composition iterations to run (default: 100).
         top_n: Number of nearby discoveries to return if no exact match (default: 3).
         tolerance: Distance threshold for considering a match "exact" (default: 1e-5).
+        workers: Number of parallel workers to use (default: 1).
 
     Returns:
         dict with exact_match and nearby_discoveries.
@@ -272,7 +179,7 @@ def eml_discover(
     engine = DiscoveryEngine(db)
 
     def evaluator(x_val):
-        """Wrapper for safe AST evaluation."""
+        """Evaluate wrapper for safe AST math."""
         return safe_eval_math(target_expression, x_val)
 
     try:
@@ -301,8 +208,12 @@ def eml_discover(
                 "name": match["name"],
                 "expression": match["expression"],
                 "mse": match["mse"],
+                "k": match.get("k", match["tree"].node_count),
                 "details": match["details"],
             }
+
+        # Sort nearby cases by MSE primarily, then K
+        results["nearby_discoveries"].sort(key=lambda x: (x["mse"], x.get("k", 0)))
 
         for near in results["nearby_discoveries"]:
             response["nearby_discoveries"].append(
@@ -310,13 +221,14 @@ def eml_discover(
                     "name": near["name"],
                     "expression": near["expression"],
                     "mse": near["mse"],
+                    "k": near.get("k", near["tree"].node_count),
                     "details": near["details"],
                 }
             )
 
         return response
 
-    except Exception as e:
+    except (ValueError, TypeError, RuntimeError) as e:
         logger.error(
             "Discovery failed for expression %r: %s",
             target_expression,
@@ -345,6 +257,7 @@ def eml_list_formulas():
     Returns:
         dict with formula names, descriptions, depths, and leaf counts.
     """
+
     db = get_db()
     rows = db.list_formulas()
     formulas = {}
@@ -394,6 +307,7 @@ def eml_tree_info(
     Returns:
         dict with tree structure, expression, RPN, depth, and optional result.
     """
+
     db = get_db()
     row = db.get_formula(formula_name)
     if row is None:
@@ -480,6 +394,7 @@ def eml_compile(expression: str):
     Returns:
         dict with the EML tree, expression, RPN code, and complexity.
     """
+
     expr = expression.strip().lower()
     db = get_db()
 
@@ -508,14 +423,14 @@ def eml_compile(expression: str):
             "message": str(e),
             "note": (
                 "Full compiler requires the bootstrapping chain from "
-                "Odrzywołek's VerifyBaseSet procedure. Ensure the operators or functions you use "
+                "Odrzywolek's VerifyBaseSet procedure. Ensure the operators or functions you use "
                 "are known to the system via the Discovery Engine."
             ),
         }
 
 
 def _compile_result(expression: str, tree: EMLNode):
-    """Helper to format compile results."""
+    """Format compile results into a dictionary."""
     return {
         "input": expression,
         "eml_expression": tree.to_expression(),
@@ -544,11 +459,7 @@ def eml_verify(
     """Verify a known EML formula against its reference function.
 
     Uses algebraically independent transcendental test points
-    (Euler-Mascheroni, Glaisher-Kinkelin constants) following
-    the paper's numeric bootstrapping verification approach.
-
-    Under the Schanuel conjecture, coincidental equality between
-    such expressions is vanishingly unlikely.
+    following the paper's numeric bootstrapping verification approach.
 
     Args:
         formula_name: Name of the formula to verify (e.g., 'exp', 'ln', 'e').
@@ -557,6 +468,7 @@ def eml_verify(
     Returns:
         dict with pass/fail status, max error, and per-point results.
     """
+
     db = get_db()
     row = db.get_formula(formula_name)
     if row is None:
@@ -570,9 +482,13 @@ def eml_verify(
 
     # Define reference functions
     ref_functions = {
-        "exp": lambda z: complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf")),
+        "exp": lambda z: (
+            complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf"))
+        ),
         "e": lambda _: complex(math.e),
-        "ln": lambda z: complex(math.log(z.real)) if z.real > 0 else complex(float("nan")),
+        "ln": lambda z: (
+            complex(math.log(z.real)) if z.real > 0 else complex(float("nan"))
+        ),
         "zero": lambda _: complex(0.0),
         "subtract": lambda x, y: complex(x - y),
         "negate": lambda z: complex(-z),
@@ -689,6 +605,7 @@ def eml_master_tree(
     Returns:
         dict describing tree structure, parameter count, and usage.
     """
+
     if depth < 1 or depth > 8:
         return {
             "status": "error",
@@ -746,6 +663,7 @@ def eml_symbolic_regression(
     Returns:
         Recovery results including the discovered formula and loss statistics.
     """
+
     if not HAS_TORCH:
         return {
             "status": "error",
@@ -787,17 +705,127 @@ def eml_symbolic_regression(
                 f"Recovered identity: {discovered}"
             ),
         }
-    except Exception as e:
+    except RuntimeError as e:
         logger.error("Symbolic regression failed: %s", e, exc_info=True)
+        return {"status": "error", "message": f"Training error: {e}"}
+    except Exception as e:
+        logger.error(
+            "Unexpected error during symbolic regression: %s", e, exc_info=True
+        )
+        return {"status": "error", "message": f"Internal error: {e}"}
+
+
+@mcp.tool(
+    name="eml_simplify",
+    annotations={
+        "title": "Simplify EML Formula",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_simplify(expression: str):
+    """Simplify an EML formula by reducing redundant compositions.
+
+    Applies identity rules like exp(ln(x)) -> x and performs constant folding.
+
+    Args:
+        expression: EML formula string or known formula name.
+
+    Returns:
+        dict with simplified expression, RPN, and complexity reduction stats.
+    """
+    db = get_db()
+    # 1. Try to get as known formula
+    row = db.get_formula(expression)
+    if row:
+        tree = EMLNode.from_dict(json.loads(row["tree_json"]))
+    else:
+        # 2. Try to compile if it looks like math
+        try:
+            compiler = EMLCompiler(db)
+            tree = compiler.compile(expression)
+        except (ValueError, SyntaxError) as e:
+            # 3. Last resort: direct tree rebuild from expression if it uses 'eml('
+            logger.debug("Simplification fallback for %s: %s", expression, e)
+            return {
+                "status": "error",
+                "message": f"Could not parse expression '{expression}'",
+            }
+
+    old_k = tree.node_count
+    simplified = simplify_tree(tree)
+    new_k = simplified.node_count
+
+    return {
+        "original_expression": tree.to_expression(),
+        "simplified_expression": simplified.to_expression(),
+        "original_k": old_k,
+        "simplified_k": new_k,
+        "reduction": f"{((old_k - new_k) / old_k * 100):.1f}%" if old_k > 0 else "0%",
+        "rpn": " ".join(simplified.to_rpn()),
+        "tree": simplified.to_dict(),
+    }
+
+
+@mcp.tool(
+    name="eml_similarity",
+    annotations={
+        "title": "EML Tree Similarity",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_similarity(formula_a: str, formula_b: str):
+    """Compute structural similarity between two EML formulas.
+
+    Uses Zhang-Shasha Tree Edit Distance (TED). A distance of 0 means
+    the trees are structurally identical.
+
+    Args:
+        formula_a: First formula name or EML expression.
+        formula_b: Second formula name or EML expression.
+
+    Returns:
+        dict with tree edit distance and complexity metrics.
+    """
+    db = get_db()
+
+    def get_tree(expr):
+        row = db.get_formula(expr)
+        if row:
+            return EMLNode.from_dict(json.loads(row["tree_json"]))
+        compiler = EMLCompiler(db)
+        return compiler.compile(expr)
+
+    try:
+        tree_a = get_tree(formula_a)
+        tree_b = get_tree(formula_b)
+    except (ValueError, TypeError, NameError, SyntaxError) as e:
+        logger.error("Similarity computation failed: %s", e)
         return {"status": "error", "message": str(e)}
 
+    distance = tree_edit_distance(tree_a, tree_b)
 
-# ==================== Resources ====================
+    return {
+        "formula_a": tree_a.to_expression(),
+        "formula_b": tree_b.to_expression(),
+        "tree_edit_distance": distance,
+        "k_a": tree_a.node_count,
+        "k_b": tree_b.node_count,
+        "max_possible_distance": tree_a.node_count + tree_b.node_count,
+        "similarity_score": max(
+            0.0, 1.0 - (distance / (tree_a.node_count + tree_b.node_count))
+        ),
+    }
 
 
 @mcp.resource("eml://grammar")
 def get_eml_grammar() -> str:
-    """The EML context-free grammar and key identities."""
+    """Return the EML context-free grammar and key identities."""
     return """
 # EML Grammar
 
@@ -827,7 +855,7 @@ Odrzywołek (2026), arXiv:2603.21852v2
 def get_complexity_table() -> str:
     """Complexity of elementary functions in EML representation."""
     return """
-# EML Complexity Table (from Odrzywołek 2026, Table 4)
+# EML Complexity Table (from Odrzywolek 2026, Table 4)
 
 ## Constants
 | Constant | Compiler K | Direct Search K |

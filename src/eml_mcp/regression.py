@@ -181,9 +181,7 @@ def train_eml_tree(
         )
 
         if torch.isnan(loss) or torch.isinf(loss):
-            print(
-                f"Stopping at epoch {epoch}: Invalid loss ({loss.item()}) encountered."
-            )
+            print(f"Stopping at epoch {epoch}: Invalid loss ({loss.item()}) encountered.")
             break
 
         loss.backward()
