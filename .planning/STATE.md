@@ -1,12 +1,12 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-last_updated: "2026-04-15T21:07:16.530Z"
+milestone: v2.0
+milestone_name: v2-discovery-optimization
+status: planning
+last_updated: "2026-04-16T00:47:00.000Z"
 progress:
-  total_phases: 4
-  completed_phases: 1
+  total_phases: 8
+  completed_phases: 4
   total_plans: 0
   completed_plans: 0
 ---
@@ -15,21 +15,24 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-15)
+See: .planning/PROJECT.md (updated 2026-04-16)
 
 **Core value:** Numerically correct EML results at machine-epsilon precision
-**Current focus:** Phase 2 — SQLite Persistence Layer
+**Current focus:** Phase 5 — Symbolic Regression & Parallel Discovery
 
 ## Current State
 
-- **Phase:** 2 of 4
-- **Status:** Ready to execute (3 plans, 3 waves)
-- **Milestone:** v1
-- **Next action:** `/gsd-execute-phase 2`
+- **Phase:** 5 of 8
+- **Status:** Planning
+- **Milestone:** v2.0
+- **Next action:** `/gsd-plan-phase 5`
 
 ## Phase History
 
-- **Phase 1 (Package Restructure):** Completed 2026-04-15 with all tests passing.
+- **Phase 1 (Package Restructure):** Completed 2026-04-15.
+- **Phase 2 (SQLite Persistence):** Completed 2026-04-15.
+- **Phase 3 (AST & Compiler):** Completed 2026-04-15.
+- **Phase 4 (Targeted Discovery):** Completed 2026-04-15.
 
 ## Decisions Log
 
