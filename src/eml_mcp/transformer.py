@@ -11,14 +11,16 @@ supports hybrid learnable weights.
 
 from __future__ import annotations
 
-from typing import Any
 import json
+from typing import Any
+
 import torch
 import torch.nn as nn
 from torch import Tensor
-from eml_mcp.trees import EMLNode, NodeType
-from eml_mcp.simplifier import simplify_tree
+
 from eml_mcp.database import EMLFormulaDB
+from eml_mcp.simplifier import simplify_tree
+from eml_mcp.trees import EMLNode, NodeType
 
 
 class EMLCompiledFFN(nn.Module):
@@ -255,12 +257,14 @@ class EMLCompiledFFN(nn.Module):
 
     def network_to_etree(self) -> list[EMLNode]:
         """Convert the current active PyTorch matrix mapping back into symbolic EMLNodes."""
+
         def build_node(idx: int) -> EMLNode:
             if idx in self.const_indices:
                 idx_pos = (self.const_indices == idx).nonzero(as_tuple=True)[0].item()
                 val = self.const_values[idx_pos].item()
                 if isinstance(val, complex):
-                    if val.imag == 0: val = val.real
+                    if val.imag == 0:
+                        val = val.real
                 node = EMLNode(NodeType.CONST, value=val)
                 node._tape_idx = idx
                 return node
@@ -282,7 +286,11 @@ class EMLCompiledFFN(nn.Module):
                         else:
                             left_idx = stage.left_indices[idx_pos].item()
                             right_idx = stage.right_indices[idx_pos].item()
-                        node = EMLNode(NodeType.EML, left=build_node(left_idx), right=build_node(right_idx))
+                        node = EMLNode(
+                            NodeType.EML,
+                            left=build_node(left_idx),
+                            right=build_node(right_idx),
+                        )
                         node._tape_idx = idx
                         return node
                 raise ValueError(f"Index {idx} not found in nodes.")
@@ -293,7 +301,7 @@ class EMLCompiledFFN(nn.Module):
         """Runs the E-Graph simplifier and returns the optimal tape indices to drop."""
         simplified = [simplify_tree(t) for t in etrees]
         kept_indices = set()
-        
+
         def trace_required(node: EMLNode):
             expr = node.to_expression()
             if expr in self.node_to_idx:
@@ -301,10 +309,10 @@ class EMLCompiledFFN(nn.Module):
             if node.node_type == NodeType.EML:
                 trace_required(node.left)
                 trace_required(node.right)
-                
+
         for t in simplified:
             trace_required(t)
-            
+
         all_indices = set(range(self.num_nodes))
         return list(all_indices - kept_indices)
 
@@ -312,11 +320,11 @@ class EMLCompiledFFN(nn.Module):
         """Zero-out weights connected to heads strictly classified outside the optimal topological selection."""
         if not self.learnable:
             return
-            
+
         etrees = self.network_to_etree()
         simplified = [simplify_tree(t) for t in etrees]
         kept_indices = set()
-        
+
         def rewire(node: EMLNode, orig_tape_idx: int):
             expr = node.to_expression()
             if expr in self.node_to_idx:
@@ -333,13 +341,21 @@ class EMLCompiledFFN(nn.Module):
                     if orig_tape_idx != -1 and left_idx != -1 and right_idx != -1:
                         for stage in self.stages:
                             if orig_tape_idx in stage.out_indices:
-                                idx_pos = (stage.out_indices == orig_tape_idx).nonzero(as_tuple=True)[0].item()
+                                idx_pos = (
+                                    (stage.out_indices == orig_tape_idx)
+                                    .nonzero(as_tuple=True)[0]
+                                    .item()
+                                )
                                 with torch.no_grad():
                                     stage.delta_W_e[idx_pos].zero_()
                                     stage.delta_W_l[idx_pos].zero_()
                                     # Snap to optimal
-                                    stage.delta_W_e[idx_pos][left_idx] = 1.0 - stage.fixed_W_e[idx_pos][left_idx]
-                                    stage.delta_W_l[idx_pos][right_idx] = 1.0 - stage.fixed_W_l[idx_pos][right_idx]
+                                    stage.delta_W_e[idx_pos][left_idx] = (
+                                        1.0 - stage.fixed_W_e[idx_pos][left_idx]
+                                    )
+                                    stage.delta_W_l[idx_pos][right_idx] = (
+                                        1.0 - stage.fixed_W_l[idx_pos][right_idx]
+                                    )
                                     stage.bias_e[idx_pos].zero_()
                                     stage.bias_l[idx_pos].zero_()
                         kept_indices.add(orig_tape_idx)
@@ -351,7 +367,7 @@ class EMLCompiledFFN(nn.Module):
                 r_idx = self.root_indices[i].item()
                 rewire(simp_tree, r_idx)
                 kept_indices.add(r_idx)
-                
+
             for stage in self.stages:
                 for i, out_idx in enumerate(stage.out_indices):
                     if out_idx.item() not in kept_indices:
