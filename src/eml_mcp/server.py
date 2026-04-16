@@ -180,7 +180,7 @@ def eml_discover(
 
     try:
         results = engine.find_target(
-            target_evaluator=evaluator,
+            target_expression=target_expression,
             max_iterations=iterations,
             top_n=top_n,
             tolerance=tolerance,
@@ -198,7 +198,7 @@ def eml_discover(
             "nearby_discoveries": [],
         }
 
-        if results["exact_match"]:
+        if results.get("exact_match"):
             match = results["exact_match"]
             item = {
                 "name": match["name"],
@@ -212,7 +212,7 @@ def eml_discover(
             response["exact_match"] = item
 
         # Sort is now handled by DiscoveryEngine.find_target, but we ensure output format
-        for near in results["nearby_discoveries"]:
+        for near in results.get("nearby_discoveries", []):
             item = {
                 "name": near["name"],
                 "expression": near["expression"],

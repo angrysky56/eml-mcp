@@ -16,19 +16,21 @@ import secrets
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any
+import random
+import numpy as np
+from typing import Any, Optional, Dict
 
 from eml_mcp.compiler import EMLCompiler
 from eml_mcp.database import EMLFormulaDB, deserialize_signature
 from eml_mcp.primitives import TEST_POINTS
 from eml_mcp.similarity import tree_edit_distance
 from eml_mcp.simplifier import simplify_tree
-from eml_mcp.trees import EMLNode, var
+from eml_mcp.trees import EMLNode, NodeType, const, var
 
 logger = logging.getLogger(__name__)
 
 
-def safe_eval_math(expression: str, x: complex) -> complex:
+def safe_eval_math(expression: str, x: complex, **kwargs: complex) -> complex:
     """Safely evaluate a mathematical expression using AST walking.
 
     Acts as a 'Feature Filter' to ensure the target expression is within
@@ -78,6 +80,7 @@ def safe_eval_math(expression: str, x: complex) -> complex:
         "e": math.e,
         "tau": getattr(math, "tau", 6.283185307179586),
         "j": 1j,
+        **kwargs,
     }
 
     def _eval(node):
@@ -153,18 +156,74 @@ class DiscoveryEngine:
         self._formula_cache: list[tuple[str, list[complex]]] = []
         self._cache_synced = False
 
+    def _evaluate_target(self, x: complex) -> complex:
+        """Evaluate target expression at a point."""
+        try:
+            # We use x as the variable name in target expressions
+            return safe_eval_math(self.target_expression, x)
+        except Exception:
+            return complex(float("nan"))
+
+    def _calculate_mse(self, node: EMLNode) -> float:
+        """Calculate Mean Squared Error against target points."""
+        errors = []
+        for p in self.test_points:
+            try:
+                # Target value
+                target_val = self._evaluate_target(p)
+                if not np.isfinite(target_val):
+                    continue
+
+                # EML value - provide defaults for common variables
+                # x is the primary test point
+                # y, z are alternative variables that might be in the tree
+                val = node.evaluate({"x": p, "y": p * 1.1 + 0.1, "z": p * 0.9 - 0.1})
+
+                if not np.isfinite(val):
+                    errors.append(1e6)  # Large penalty for NaN/Inf
+                    continue
+
+                diff = target_val - val
+                errors.append(np.abs(diff) ** 2)
+            except Exception:
+                errors.append(1e6)
+
+        if not errors:
+            return 1e6
+
+        return float(np.mean(errors))
+
     def _extract_variables(self, node: EMLNode) -> set[str]:
         """Extract all unique variable names from a tree."""
-        if node.node_type == "var":
-            return {node.var_name}
-        elif node.node_type == "eml":
-            return self._extract_variables(node.left) | self._extract_variables(node.right)
-        return set()
+        variables = set()
+
+        def traverse(n: EMLNode):
+            if n.node_type == NodeType.VAR:
+                variables.add(n.var_name)
+            elif n.node_type == NodeType.EML:
+                traverse(n.left)
+                if n.right:
+                    traverse(n.right)
+
+        traverse(node)
+        return variables
 
     def generate_random_composition(
-        self, base_formulas: list[dict[str, Any]] | None = None
+        self,
+        base_formulas: list[dict[str, Any]] | None = None,
+        max_complexity: int | None = None,
+        max_depth: int = 2,
+        _current_depth: int = 0,
     ) -> tuple[EMLNode, dict[str, Any]]:
-        """Generate a new formula by randomly composing existing ones."""
+        """Generate a new formula by randomly composing existing ones.
+
+        Args:
+            base_formulas: Optional list of base formulas.
+            max_complexity: Optional maximum node count for the resulting tree.
+            max_depth: Maximum recursion depth for compositions.
+        """
+        import random
+
         formulas = (
             base_formulas
             if base_formulas is not None
@@ -173,20 +232,59 @@ class DiscoveryEngine:
         if not formulas:
             raise ValueError("No base formulas available to compose from")
 
-        # Use secrets for RNG to satisfy security linters and ensure high-quality randomness
-        base_record = secrets.choice(formulas)
+        # Filter by complexity if requested
+        if max_complexity is not None:
+            formulas = [
+                f
+                for f in formulas
+                if json.loads(f["tree_json"]).get("node_count", 0) <= max_complexity
+            ]
+            if not formulas:
+                # Fallback to absolute basics if nothing fits
+                formulas = [
+                    f
+                    for f in (self.db.list_formulas() if self.db else [])
+                    if f["name"] in ("exp", "ln", "e", "zero")
+                ]
+
+        # Weight formulas by inverse complexity to favor simple building blocks
+        weights = []
+        for f in formulas:
+            k = json.loads(f["tree_json"]).get("node_count", 1)
+            # Favor named/core formulas even more
+            is_core = not f["name"].startswith("discovered_")
+            weight = (10.0 if is_core else 1.0) / k
+            weights.append(weight)
+
+        base_record = random.choices(formulas, weights=weights, k=1)[0]
         base_tree = EMLNode.from_dict(json.loads(base_record["tree_json"]))
         base_vars = json.loads(base_record["variables"])
 
         details = {"base": base_record["name"], "substitutions": {}}
-
         mappings = {}
+
         for v in base_vars:
-            if secrets.SystemRandom().random() < 0.6:  # 60% chance to substitute
-                sub_record = secrets.choice(formulas)
-                sub_tree = EMLNode.from_dict(json.loads(sub_record["tree_json"]))
-                mappings[v] = sub_tree
-                details["substitutions"][v] = sub_record["name"]
+            # 50% chance to substitute if we haven't reached max depth
+            if _current_depth < max_depth and random.random() < 0.5:
+                try:
+                    sub_tree, sub_details = self.generate_random_composition(
+                        base_formulas=formulas,
+                        max_complexity=max_complexity,
+                        max_depth=max_depth,
+                        _current_depth=_current_depth + 1,
+                    )
+                    # Check complexity limit for substitution
+                    if max_complexity is None or (
+                        base_tree.node_count + sub_tree.node_count < max_complexity * 2
+                    ):
+                        mappings[v] = sub_tree
+                        details["substitutions"][v] = sub_details
+                    else:
+                        mappings[v] = var(v)
+                        details["substitutions"][v] = "identity"
+                except (ValueError, RecursionError):
+                    mappings[v] = var(v)
+                    details["substitutions"][v] = "identity"
             else:
                 mappings[v] = var(v)
                 details["substitutions"][v] = "identity"
@@ -194,14 +292,25 @@ class DiscoveryEngine:
         new_tree = base_tree.substitute(mappings)
         return new_tree, details
 
-    def _eval_tree_safe(self, tree: EMLNode) -> list[complex] | None:
-        """Evaluate a tree against test points safely. Returns None if it fails or overflows."""
+    def _eval_tree_safe(
+        self, tree: EMLNode, vars: dict[str, complex] | None = None
+    ) -> list[complex] | None:
+        """Evaluate a tree against test points safely.
+
+        Args:
+            tree: The EMLNode to evaluate.
+            vars: Extra variable bindings (e.g. y=0.1).
+        """
         outputs = []
+        # Use more diverse extra vars to distinguish bivariate better
+        extra_vars = vars or {"y": complex(0.42)}
         for point in self.test_points:
             try:
-                # Supply 1.0 for other potential variables like 'y' during basic check
-                val = tree.evaluate({"x": point, "y": complex(1.0)})
-                if math.isnan(val.real) or math.isinf(val.real):
+                bindings = {"x": point, **extra_vars}
+                val = tree.evaluate(bindings)
+                if not cmath.isfinite(val.real) or not cmath.isfinite(val.imag):
+                    return None
+                if abs(val) > 1e20:  # Sanity bound for stability
                     return None
                 outputs.append(val)
             except (ValueError, ZeroDivisionError, OverflowError):
@@ -338,6 +447,86 @@ class DiscoveryEngine:
                 continue
         return candidates
 
+    def _mutate_tree(self, tree: EMLNode) -> EMLNode:
+        """Apply a random mutation to an EML tree."""
+        import random
+
+        from eml_mcp.trees import NodeType
+
+        new_tree = tree.copy()
+
+        # 1. Collect all nodes in the copy for potential mutation
+        all_nodes = []
+
+        def collect(n):
+            all_nodes.append(n)
+            if n.node_type == NodeType.EML:
+                if n.left:
+                    collect(n.left)
+                if n.right:
+                    collect(n.right)
+
+        collect(new_tree)
+
+        if not all_nodes:
+            return new_tree
+
+        target_node = random.choice(all_nodes)
+        mutation_type = random.random()
+
+        if mutation_type < 0.3:  # Point mutation / Leaf swap
+            if target_node.node_type == NodeType.VAR:
+                target_node.var_name = random.choice(["x", "y"])
+            elif target_node.node_type == NodeType.CONST:
+                # Toggle between common constants
+                vals = [0.0, 1.0, 2.0, math.pi, math.e]
+                target_node.value = complex(random.choice(vals))
+            else:  # Convert EML to leaf
+                leaf = random.choice([var("x"), var("y"), const(1.0)])
+                target_node.node_type = leaf.node_type
+                target_node.var_name = leaf.var_name
+                target_node.value = leaf.value
+                target_node.left = None
+                target_node.right = None
+
+        elif mutation_type < 0.6:  # Subtree replacement
+            try:
+                sub, _ = self.generate_random_composition(max_depth=0)
+                target_node.node_type = sub.node_type
+                target_node.var_name = sub.var_name
+                target_node.value = sub.value
+                target_node.left = sub.left
+                target_node.right = sub.right
+            except ValueError:
+                pass
+
+        elif mutation_type < 0.8:  # Expansion (wrap in EML)
+            old_node = target_node.copy()
+            try:
+                other, _ = self.generate_random_composition(max_depth=0)
+                target_node.node_type = NodeType.EML
+                if random.random() < 0.5:
+                    target_node.left = old_node
+                    target_node.right = other
+                else:
+                    target_node.left = other
+                    target_node.right = old_node
+                target_node.var_name = None
+                target_node.value = None
+            except ValueError:
+                pass
+
+        else:  # Shrinkage (unwrap)
+            if target_node.node_type == NodeType.EML and target_node.left and target_node.right:
+                child = random.choice([target_node.left, target_node.right])
+                target_node.node_type = child.node_type
+                target_node.var_name = child.var_name
+                target_node.value = child.value
+                target_node.left = child.left
+                target_node.right = child.right
+
+        return new_tree
+
     def explore_parallel(self, workers: int = 4, iterations: int = 100) -> list[str]:
         """Explore EML space using multiple processes."""
         chunk_size = max(1, iterations // workers)
@@ -390,137 +579,161 @@ class DiscoveryEngine:
 
     def find_target(
         self,
-        target_evaluator: Callable[[complex], complex] | None = None,
-        target_expression: str | None = None,
-        max_iterations: int = 100,
-        top_n: int = 5,
-        tolerance: float = 1e-10,
-        workers: int = 1,
+        target_expression: str,
+        max_iterations: int = 1000,
+        tolerance: float = 1e-8,
+        top_n: int = 3,
+        **kwargs,
     ) -> dict[str, Any]:
-        """Search for an EML formula matching a target behavior."""
-        self._cache_synced = False  # Refresh cache for targeted run
-        # 1. Generate target data
+        """
+        Search for an EML formula matching a target behavior.
+        Uses a combination of bootstrapping, random composition, and mutational search.
+        """
+        self.target_expression = target_expression
+        logger.info(f"Starting discovery for target: {target_expression}")
+
+        candidates = []
+
+        # 1. Bootstrapping: Seed with compiled target if possible
         try:
-            x_vals = self.test_points
-            target_outputs = []
+            from eml_mcp.compiler import EMLCompiler
 
-            if target_evaluator:
-                for x in x_vals:
-                    target_outputs.append(complex(target_evaluator(x)))
-            elif target_expression:
-                for x in x_vals:
-                    val = safe_eval_math(target_expression, x)
-                    target_outputs.append(complex(val))
-            else:
-                return {
-                    "status": "error",
-                    "message": "Either target_expression or target_evaluator must be provided",
+            compiler = EMLCompiler()
+            compiled_tree = compiler.compile(target_expression)
+            if compiled_tree:
+                mse = self._calculate_mse(compiled_tree)
+                candidates.append(
+                    {"tree": compiled_tree, "mse": mse, "ted": 0.0, "fitness": 1.0 / (1.0 + mse)}
+                )
+                logger.info(f"Seeded with compiled tree. Initial MSE: {mse:.2e}")
+        except Exception as e:
+            logger.debug(f"Compiler seeding failed: {e}")
+
+        # Seed with existing formulas from DB
+        for alias in self.db.list_formulas():
+            f = self.db.get_formula(alias["name"])
+            tree = EMLNode.from_dict(json.loads(f["tree_json"]))
+            mse = self._calculate_mse(tree)
+            candidates.append({"tree": tree, "mse": mse, "ted": 99.0, "fitness": 1.0 / (1.0 + mse)})
+
+        # Ensure we have some candidates
+        if not candidates:
+            candidates.append({"tree": var("x"), "mse": 1e6, "ted": 99.0, "fitness": 1e-6})
+
+        # 3. Evolutionary Search Loop
+        for i in range(max_iterations):
+            # Sort by MSE primarily
+            candidates.sort(key=lambda x: x["mse"])
+            candidates = candidates[:10]  # Keep top 10 elites
+
+            # Exit if we hit tolerance
+            if candidates[0]["mse"] < tolerance:
+                logger.info(f"Exact match found at iteration {i}!")
+                break
+
+            # Logging progress
+            if i % 100 == 0:
+                logger.info(f"Iter {i}: Best MSE = {candidates[0]['mse']:.2e}")
+
+            new_candidates = []
+
+            # Select parents weighted by inverse MSE
+            weights = [1.0 / (1.0 + c["mse"]) for c in candidates]
+            total_w = sum(weights)
+            probs = (
+                [w / total_w for w in weights]
+                if total_w > 0
+                else [1.0 / len(candidates)] * len(candidates)
+            )
+
+            # Create mutants
+            for _ in range(20):  # Lambda = 20
+                parent = random.choices(candidates, weights=probs, k=1)[0]
+                mutant_tree = self._mutate_tree(parent["tree"].copy())
+
+                # Simplify mutant
+                mutant_tree = simplify_tree(mutant_tree)
+
+                mse = self._calculate_mse(mutant_tree)
+                new_candidates.append(
+                    {
+                        "tree": mutant_tree,
+                        "mse": mse,
+                        "ted": tree_edit_distance(parent["tree"], mutant_tree),
+                    }
+                )
+
+                # Local hill climbing if mutation was good
+                if mse < parent["mse"]:
+                    for _ in range(3):  # Small burst of local mutations
+                        hc_tree = self._mutate_tree(mutant_tree.copy())
+                        hc_tree = simplify_tree(hc_tree)
+                        hc_mse = self._calculate_mse(hc_tree)
+                        new_candidates.append(
+                            {
+                                "tree": hc_tree,
+                                "mse": hc_mse,
+                                "ted": tree_edit_distance(mutant_tree, hc_tree),
+                            }
+                        )
+
+            candidates.extend(new_candidates)
+
+            # Occasionally add a completely random tree to maintain diversity
+            if i % 50 == 0:
+                random_tree = self.generate_random_composition(max_complexity=3, max_depth=2)[0]
+                candidates.append(
+                    {"tree": random_tree, "mse": self._calculate_mse(random_tree), "ted": 99.0}
+                )
+
+        # Final ranking
+        candidates.sort(key=lambda x: x["mse"])
+        best_overall = candidates[0]
+
+        # Save and return results
+        if best_overall["mse"] < tolerance:
+            import secrets
+
+            name = f"discovered_{secrets.token_hex(4)}"
+            used_vars = sorted(list(self._extract_variables(best_overall["tree"])))
+
+            self.db.add_formula(
+                name=name,
+                description=f"Auto-discovered matching '{target_expression}'",
+                tree=best_overall["tree"],
+                variables=used_vars,
+                note=f"Targeted search best MSE: {best_overall['mse']:.2e}",
+            )
+            self.db.add_derivation(
+                formula_name=name,
+                parent_a=None,
+                parent_b=None,
+                method="evolutionary_search",
+                details=f"Target: {target_expression}",
+            )
+            return {
+                "exact_match": {
+                    "name": name,
+                    "expression": str(best_overall["tree"]),
+                    "mse": best_overall["mse"],
+                    "k": best_overall["tree"].node_count,
+                    "details": f"Evolutionary match for '{target_expression}'",
                 }
-        except (ValueError, TypeError, NameError, SyntaxError) as e:
-            return {"status": "error", "message": f"Failed to evaluate target: {e}"}
-
-        # 2. Compile target if possible for structural ranking
-        target_tree = None
-        if target_expression:
-            try:
-                compiler = EMLCompiler(self.db)
-                target_tree = compiler.compile(target_expression)
-                # target_tree = simplify_tree(target_tree) # Optional
-            except (ValueError, SyntaxError):
-                pass
-
-        best_matches = []
-
-        def record_candidate(name: str, tree: EMLNode, details: str, outputs: list[complex]):
-            mse = self.compute_mse(outputs, target_outputs)
-            # Remove redundant or identical values
-            if any(m["name"] == name for m in best_matches):
-                return
-
-            ted = None
-            if target_tree:
-                try:
-                    ted = tree_edit_distance(tree, target_tree)
-                except Exception:
-                    pass
-
-            item = {
-                "name": name,
-                "expression": tree.to_expression(),
-                "tree": tree,
-                "mse": mse,
-                "details": details,
             }
-            if ted is not None:
-                item["ted"] = ted
-            best_matches.append(item)
 
-        # 1. Check existing DB formulas
-        for f_record in self.db.list_formulas() if self.db else []:
-            f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
-            f_outputs = self._eval_tree_safe(f_tree)
-            if f_outputs is not None:
-                record_candidate(f_record["name"], f_tree, "existing DB formula", f_outputs)
-
-        # 2. Explore for targeted generation
-        if workers > 1:
-            # Reusing existing parallel exploration for discovery phase
-            logger.info("Running parallel targeted exploration with %d workers", workers)
-            discovered_names = self.explore(iterations=max_iterations, workers=workers)
-            for name in discovered_names:
-                f_record = self.db.get_formula(name)
-                if not f_record:
-                    continue
-                tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
-                outputs = self._eval_tree_safe(tree)
-                if outputs:
-                    record_candidate(name, tree, "Parallel discovery", outputs)
-        else:
-            for _ in range(max_iterations):
-                try:
-                    tree, details = self.generate_random_composition()
-                    tree = simplify_tree(tree)
-                    outputs = self._eval_tree_safe(tree)
-                    if outputs is None:
-                        continue
-
-                    if self.is_novel_and_stable(tree, check_outputs=outputs):
-                        used_vars = sorted(list(self._extract_variables(tree)))
-                        # Use random suffix to avoid collisions
-                        suffix = secrets.token_hex(2)
-                        name = f"discovered_target_{suffix}"
-                        if self.db:
-                            self.db.add_formula(
-                                name=name,
-                                description="Targeted discovery composition.",
-                                tree=tree,
-                                variables=used_vars,
-                                note="Targeted search formula.",
-                            )
-                            self.db.add_derivation(
-                                formula_name=name,
-                                parent_a=None,
-                                parent_b=None,
-                                method="targeted_composition",
-                                details=details,
-                            )
-                        record_candidate(name, tree, f"Composition: {details}", outputs)
-                except (OverflowError, ValueError) as e:
-                    logger.debug("Composition failed during discovery: %s", e)
-
-        # Sort by MSE primarily, then TED (if available), then K
-        best_matches.sort(
-            key=lambda x: (x["mse"], x.get("ted", float("inf")), x["tree"].node_count)
-        )
-
-        exact_match = None
-        if best_matches and best_matches[0]["mse"] < tolerance:
-            exact_match = best_matches[0]
-
+        # Otherwise return nearby discoveries
         return {
-            "status": "success",
-            "exact_match": exact_match,
-            "nearby_discoveries": best_matches[:top_n],
+            "nearby_discoveries": [
+                {
+                    "name": f"discovered_candidate_{hash(str(c['tree'])) % 100000000:08x}",
+                    "expression": str(c["tree"]),
+                    "mse": c["mse"],
+                    "k": c["tree"].node_count,
+                    "details": "Mutational variant",
+                    "ted": c.get("ted"),
+                }
+                for c in candidates[:top_n]
+            ]
         }
 
 
