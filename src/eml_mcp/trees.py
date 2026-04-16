@@ -150,10 +150,13 @@ class EMLNode:
         """
 
         outputs = []
-        for point in test_points:
+        for i, point in enumerate(test_points):
             try:
-                # Supply 1.0 for other potential variables like 'y' during basic check
-                val = self.evaluate({"x": point, "y": complex(1.0)})
+                # Provide a varying 'y' using other test points to avoid collisions
+                y_point = test_points[(i + 1) % len(test_points)]
+                val = self.evaluate(
+                    {"x": point, "y": y_point, "z": test_points[(i + 2) % len(test_points)]}
+                )
                 if math.isnan(val.real) or math.isinf(val.real):
                     return None
                 outputs.append(val)

@@ -305,3 +305,78 @@ class TestVerifyEMLIdentity:
 
         result = verify_eml_identity(tree, wrong_ref, test_points=[complex(EULER_MASCHERONI)])
         assert result["passed"] is False
+
+
+class TestHyperbolicAndLnLn:
+    """Verify hyperbolic and double log identities from the database."""
+
+    def test_hyperbolic_identities(self) -> None:
+        from eml_mcp.database import EMLFormulaDB
+        import json
+
+        db = EMLFormulaDB()
+
+        # Test sinh
+        if db.formula_exists("sinh"):
+            row = db.get_formula("sinh")
+            tree = EMLNode.from_dict(
+                json.loads(row["tree_json"]) if type(row["tree_json"]) is str else row["tree_json"]
+            )
+
+            def ref_sinh(z: complex) -> complex:
+                import cmath
+
+                return cmath.sinh(z)
+
+            res = verify_eml_identity(tree, ref_sinh)
+            assert res["passed"], f"sinh verification failed: {res['max_error']}"
+
+        # Test cosh
+        if db.formula_exists("cosh"):
+            row = db.get_formula("cosh")
+            tree = EMLNode.from_dict(
+                json.loads(row["tree_json"]) if type(row["tree_json"]) is str else row["tree_json"]
+            )
+
+            def ref_cosh(z: complex) -> complex:
+                import cmath
+
+                return cmath.cosh(z)
+
+            res = verify_eml_identity(tree, ref_cosh)
+            assert res["passed"], f"cosh verification failed: {res['max_error']}"
+
+        # Test tanh
+        if db.formula_exists("tanh"):
+            row = db.get_formula("tanh")
+            tree = EMLNode.from_dict(
+                json.loads(row["tree_json"]) if type(row["tree_json"]) is str else row["tree_json"]
+            )
+
+            def ref_tanh(z: complex) -> complex:
+                import cmath
+
+                return cmath.tanh(z)
+
+            res = verify_eml_identity(tree, ref_tanh)
+            assert res["passed"], f"tanh verification failed: {res['max_error']}"
+
+        # Test ln_ln
+        if db.formula_exists("ln_ln"):
+            row = db.get_formula("ln_ln")
+            tree = EMLNode.from_dict(
+                json.loads(row["tree_json"]) if type(row["tree_json"]) is str else row["tree_json"]
+            )
+
+            def ref_ln_ln(z: complex) -> complex:
+                import cmath
+
+                # Only defined for Re(z) > 1 clearly for real log log, but use complex log
+                return cmath.log(cmath.log(z))
+
+            res = verify_eml_identity(
+                tree,
+                ref_ln_ln,
+                test_points=[complex(EULER_MASCHERONI) + 2.0, complex(2.0), complex(3.0)],
+            )
+            assert res["passed"], f"ln_ln verification failed: {res['max_error']}"
