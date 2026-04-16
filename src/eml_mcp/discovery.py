@@ -19,7 +19,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 from eml_mcp.compiler import EMLCompiler
-from eml_mcp.database import EMLFormulaDB
+from eml_mcp.database import EMLFormulaDB, deserialize_signature
+from eml_mcp.primitives import TEST_POINTS
 from eml_mcp.similarity import tree_edit_distance
 from eml_mcp.simplifier import simplify_tree
 from eml_mcp.trees import EMLNode, var
@@ -147,14 +148,7 @@ class DiscoveryEngine:
             test_points: Optional list of complex test points for functional matching.
         """
         self.db = db
-        self.test_points = test_points or [
-            complex(0.5772156649015329),  # Euler-Mascheroni
-            complex(1.2824271291006226),  # Glaisher-Kinkelin
-            complex(1.4142135623730951),  # sqrt(2)
-            complex(1.6180339887498949),  # Golden Ratio
-            complex(2.5),
-            complex(0.1),
-        ]
+        self.test_points = test_points or TEST_POINTS
         # Cache for (name, outputs) to avoid O(N^2) evaluation overhead
         self._formula_cache: list[tuple[str, list[complex]]] = []
         self._cache_synced = False
@@ -240,8 +234,14 @@ class DiscoveryEngine:
             if self.db:
                 for f_record in self.db.list_formulas():
                     name = f_record["name"]
-                    f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
-                    f_outputs = self._eval_tree_safe(f_tree)
+                    sig_raw = f_record.get("signature")
+                    f_outputs = deserialize_signature(sig_raw)
+
+                    # Fallback if signature missing (transition logic)
+                    if f_outputs is None:
+                        f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
+                        f_outputs = self._eval_tree_safe(f_tree)
+
                     if f_outputs:
                         self._formula_cache.append((name, f_outputs))
             self._cache_synced = True

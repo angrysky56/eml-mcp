@@ -16,6 +16,16 @@ DTYPE = np.complex128
 EXP_CLAMP_MAX = 700.0  # exp(709) overflows float64
 EXP_CLAMP_MIN = -700.0
 
+# Standard test points for functional matching and verification
+TEST_POINTS = [
+    complex(0.5772156649015329),  # Euler-Mascheroni
+    complex(1.2824271291006226),  # Glaisher-Kinkelin
+    complex(1.4142135623730951),  # sqrt(2)
+    complex(1.6180339887498949),  # Golden Ratio
+    complex(2.5),
+    complex(0.1),
+]
+
 
 def _safe_exp(z: complex | np.ndarray) -> complex | np.ndarray:
     """Clamped complex exponential to prevent overflow."""

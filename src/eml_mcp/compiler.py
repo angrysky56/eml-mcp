@@ -10,7 +10,7 @@ import ast
 import json
 
 from eml_mcp.database import EMLFormulaDB
-from eml_mcp.trees import EMLNode, const, var
+from eml_mcp.trees import EMLNode, NodeType, const, var
 
 
 class EMLCompiler:
@@ -68,6 +68,11 @@ class EMLCompiler:
 
             func_name = node.func.id
             args = [self._visit(arg) for arg in node.args]
+
+            if func_name == "eml":
+                if len(args) != 2:
+                    raise ValueError(f"eml() requires 2 arguments, got {len(args)}")
+                return EMLNode(node_type=NodeType.EML, left=args[0], right=args[1])
 
             formula = self.db.get_formula(func_name)
             if not formula:

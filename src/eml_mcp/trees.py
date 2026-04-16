@@ -137,6 +137,37 @@ class EMLNode:
                 "right": self.right.to_dict(),
             }
 
+    def to_signature(self, test_points: list[complex]) -> list[complex] | None:
+        """Compute the functional signature of this tree on test points.
+
+        Returns None if evaluation fails or produces non-finite results.
+        """
+        import math
+
+        outputs = []
+        for point in test_points:
+            try:
+                # Supply 1.0 for other potential variables like 'y' during basic check
+                val = self.evaluate({"x": point, "y": complex(1.0)})
+                if math.isnan(val.real) or math.isinf(val.real):
+                    return None
+                outputs.append(val)
+            except (ValueError, ZeroDivisionError, OverflowError):
+                return None
+        return outputs
+
+    def __eq__(self, other: object) -> bool:
+        """Structural equality check."""
+        if not isinstance(other, EMLNode):
+            return False
+        if self.node_type != other.node_type:
+            return False
+        if self.node_type == NodeType.CONST:
+            return abs(self.value - other.value) < 1e-15
+        if self.node_type == NodeType.VAR:
+            return self.var_name == other.var_name
+        return self.left == other.left and self.right == other.right
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EMLNode:
         """Reconstruct an EMLNode tree from a dictionary (inverse of to_dict)."""

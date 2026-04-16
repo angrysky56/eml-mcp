@@ -9,7 +9,26 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from eml_mcp.primitives import TEST_POINTS
 from eml_mcp.trees import EMLNode
+
+
+def serialize_signature(outputs: list[complex] | None) -> str | None:
+    """Serialize a list of complex numbers to JSON for storage."""
+    if outputs is None:
+        return None
+    return json.dumps([{"real": o.real, "imag": o.imag} for o in outputs])
+
+
+def deserialize_signature(s: str | None) -> list[complex] | None:
+    """Deserialize a list of complex numbers from JSON."""
+    if not s:
+        return None
+    try:
+        data = json.loads(s)
+        return [complex(item["real"], item["imag"]) for item in data]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
 
 
 class EMLFormulaDB:
@@ -44,6 +63,7 @@ class EMLFormulaDB:
                     k INTEGER NOT NULL,
                     leaf_count INTEGER NOT NULL,
                     variables TEXT NOT NULL,
+                    signature TEXT, -- JSON array of complex outputs on standard test points
                     note TEXT,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -81,6 +101,11 @@ class EMLFormulaDB:
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
             """)
+            # Migration: add signature column if missing
+            try:
+                self.conn.execute("ALTER TABLE formulas ADD COLUMN signature TEXT;")
+            except sqlite3.OperationalError:
+                pass  # Already exists
 
     def _seed_formulas(self) -> None:
         """Populate the formulas table with initial seed data."""
@@ -148,15 +173,19 @@ class EMLFormulaDB:
         tree: EMLNode,
         variables: list[str],
         note: str | None = None,
+        signature: list[complex] | None = None,
     ) -> None:
         """Add a new formula to the database."""
+        if signature is None:
+            signature = tree.to_signature(TEST_POINTS)
+
         with self.conn:
             self.conn.execute(
                 """
                 INSERT INTO formulas (
                     name, description, tree_json, rpn, expression,
-                    depth, k, leaf_count, variables, note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    depth, k, leaf_count, variables, note, signature
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -169,6 +198,7 @@ class EMLFormulaDB:
                     tree.leaf_count,
                     json.dumps(variables),
                     note,
+                    serialize_signature(signature),
                 ),
             )
 

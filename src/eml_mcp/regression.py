@@ -27,9 +27,22 @@ class SelectionGate(nn.Module):
         self.variable_names = variable_names
         self.constants = constants if constants is not None else [1.0, 0.0, math.e]
 
-        # Initialize weights with small random noise to break symmetry
-        n_inputs = len(self.variable_names) + len(self.constants)
-        self.selection_logits = nn.Parameter(torch.randn(n_inputs) * 0.01)
+        n_vars = len(self.variable_names)
+        n_consts = len(self.constants)
+        total = n_vars + n_consts
+
+        # Initialize logits such that constant 1.0 is favored initially.
+        # This prevents the tree from starting with 'x' which leads to rapid divergence.
+        # 1.0 is usually index n_vars (first constant)
+        self.selection_logits = nn.Parameter(torch.zeros(total))
+        with torch.no_grad():
+            if n_consts > 0:
+                # Set logit for 1.0 to a higher value if it exists
+                try:
+                    one_idx = self.constants.index(1.0)
+                    self.selection_logits[n_vars + one_idx] = 10.0
+                except ValueError:
+                    pass
 
     def forward(self, variables: dict[str, Tensor], temperature: float = 1.0) -> Tensor:
         """Compute the weighted combination of inputs."""
@@ -69,7 +82,10 @@ class SelectionGate(nn.Module):
                 c = self.constants[c_idx]
                 if c == math.e:
                     return "e"
-                return str(int(c) if c.is_integer() else c)
+                # Check for small integers
+                if abs(c - round(c)) < 1e-9:
+                    return str(int(round(c)))
+                return str(c)
 
 
 class EMLNode(nn.Module):
@@ -85,32 +101,30 @@ class EMLNode(nn.Module):
         x = self.left(variables, temperature=temperature)
         y = self.right(variables, temperature=temperature)
 
-        # Soft clamping for gradients: linear in [-50, 50], log growth outside
-        threshold = 50.0
+        # Soft clamping for stability while allowing large values
+        # We use a threshold of 20.0 for exp(x), as exp(20) is 4.8e8,
+        # which is safe for multiple compositions.
+        threshold = 20.0
         x_real = x.real
-        # Above threshold: threshold + log(1 + x - threshold)
-        x_real = torch.where(
-            x_real > threshold, threshold + torch.log(1.0 + x_real - threshold), x_real
-        )
-        # Below -threshold: -threshold - log(1 - (x + threshold))
-        x_real = torch.where(
-            x_real < -threshold,
-            -threshold - torch.log(1.0 - (x_real + threshold)),
-            x_real,
-        )
 
-        exp_x = torch.exp(torch.complex(x_real, x.imag))
+        # Smoothly clamp large real values to prevent inf/nan
+        # x_clamped = x in [-threshold, threshold]
+        # uses tanh for soft saturation outside range
+        x_real_stable = torch.clamp(x_real, min=-threshold, max=threshold)
+        # Apply a small residual for values outside the clamp to maintain gradients
+        x_real_stable = x_real_stable + 0.01 * (x_real - x_real_stable)
 
-        # Clip magnitude of exp_x for stability while preserving phase
-        exp_x = torch.polar(exp_x.abs().clamp(max=1e30), exp_x.angle())
+        exp_x = torch.exp(torch.complex(x_real_stable, x.imag))
 
-        # Safe complex log
-        y_mag = y.abs().clamp(min=1e-15)
+        # Safe complex log: ensure y is not too close to zero
+        # y = exp(x) - ln(y')
+        y_mag = y.abs().clamp(min=1e-12, max=1e30)
         y_real = y.real
         y_imag = y.imag
+
         # Stabilize atan2 gradient near origin
-        is_near_origin = (y_real.abs() < 1e-18) & (y_imag.abs() < 1e-18)
-        y_real_safe = torch.where(is_near_origin, y_real + 1e-18, y_real)
+        is_near_origin = (y_real.abs() < 1e-15) & (y_imag.abs() < 1e-15)
+        y_real_safe = torch.where(is_near_origin, y_real + 1e-15, y_real)
         ln_y = torch.complex(torch.log(y_mag), torch.atan2(y_imag, y_real_safe))
 
         return exp_x - ln_y
