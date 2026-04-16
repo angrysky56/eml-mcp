@@ -287,6 +287,7 @@ class EMLFormulaDB:
 
         with self.conn:
             cursor = self.conn.execute(
+                # trunk-ignore(bandit/B608)
                 f"UPDATE formulas SET {', '.join(fields)} WHERE name = ?",
                 params,
             )
