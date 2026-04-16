@@ -602,6 +602,7 @@ class DiscoveryEngine:
         max_iterations: int = 1000,
         tolerance: float = 1e-8,
         top_n: int = 3,
+        stagnation_limit: int | None = 100,
         **_kwargs,
     ) -> dict[str, Any]:
         """
@@ -613,6 +614,7 @@ class DiscoveryEngine:
             max_iterations: Maximum search iterations.
             tolerance: MSE threshold for exact match.
             top_n: Number of nearby candidates to return.
+            stagnation_limit: Bail if best MSE hasn't improved in N iterations.
         """
         if isinstance(target, str):
             self.target_expression = target
@@ -666,19 +668,39 @@ class DiscoveryEngine:
             candidates.append({"tree": var("x"), "mse": 1e6, "ted": 99.0, "fitness": 1e-6})
 
         # 3. Evolutionary Search Loop
+        best_mse = float("inf")
+        stagnation_count = 0
+
         for i in range(max_iterations):
             # Sort by MSE primarily
             candidates.sort(key=lambda x: x["mse"])
             candidates = candidates[:10]  # Keep top 10 elites
 
+            current_best_mse = candidates[0]["mse"]
+
             # Exit if we hit tolerance
-            if candidates[0]["mse"] < tolerance:
+            if current_best_mse < tolerance:
                 logger.info("Exact match found at iteration %d!", i)
+                break
+
+            # Stagnation check
+            if current_best_mse < best_mse:
+                # Significant improvement check (to avoid micro-fluctuations)
+                if best_mse - current_best_mse > tolerance * 0.1:
+                    best_mse = current_best_mse
+                    stagnation_count = 0
+            else:
+                stagnation_count += 1
+
+            if stagnation_limit and stagnation_count >= stagnation_limit:
+                logger.info(
+                    "Stagnation reached at iteration %d. Best MSE: %.2e", i, current_best_mse
+                )
                 break
 
             # Logging progress
             if i % 100 == 0:
-                logger.info("Iter %d: Best MSE = %.2e", i, candidates[0]["mse"])
+                logger.info("Iter %d: Best MSE = %.2e", i, current_best_mse)
 
             new_candidates = []
 

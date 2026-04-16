@@ -165,6 +165,7 @@ def eml_discover(
     iterations: int = 100,
     top_n: int = 3,
     tolerance: float = 1e-5,
+    stagnation_limit: int = 100,
     workers: int = 1,
 ):
     """Search for an EML formula matching a target behavior.
@@ -178,6 +179,7 @@ def eml_discover(
         iterations: Number of composition iterations to run (default: 100).
         top_n: Number of nearby discoveries to return if no exact match (default: 3).
         tolerance: Distance threshold for considering a match "exact" (default: 1e-5).
+        stagnation_limit: Number of iterations without improvement before bailing (default: 100).
         workers: Number of parallel workers to use (default: 1).
 
     Returns:
@@ -193,6 +195,7 @@ def eml_discover(
             max_iterations=iterations,
             top_n=top_n,
             tolerance=tolerance,
+            stagnation_limit=stagnation_limit,
             workers=workers,
         )
 
