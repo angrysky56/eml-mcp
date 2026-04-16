@@ -220,3 +220,96 @@ def train_eml_tree(
             print(f"Epoch {epoch}: Loss = {loss.item():.2e}")
 
     return model
+
+
+def simulated_perception_nn(mse_val: float) -> dict[str, float]:
+    """
+    Simulation of the MoR Perception NN that predicts if more depth is needed.
+    """
+    if mse_val < 0.1:
+        return {"needs_more_depth": 0.05, "is_scaling_error": 0.1, "mse_is_low": 0.95}
+    elif mse_val < 5.0:
+        return {"needs_more_depth": 0.4, "is_scaling_error": 0.8, "mse_is_low": 0.3}
+    else:
+        return {"needs_more_depth": 0.95, "is_scaling_error": 0.2, "mse_is_low": 0.01}
+
+
+def mcculloch_pitts_gate(nn_outputs: dict[str, float], threshold: float = 0.5) -> bool:
+    """
+    Hybrid-AI MCP gate function, replicating mor_halt_rule_v2.
+    Weights: [-1.0, -0.5, 2.0, -1.5] for [bias, is_scaling_error, mse_is_low, needs_more_depth]
+    """
+    # Convert probabilities to binary using threshold
+    binary_inputs = {k: 1.0 if v >= threshold else 0.0 for k, v in nn_outputs.items()}
+
+    score = (
+        -1.0
+        - 0.5 * binary_inputs["is_scaling_error"]
+        + 2.0 * binary_inputs["mse_is_low"]
+        - 1.5 * binary_inputs["needs_more_depth"]
+    )
+    return score >= 1.0
+
+
+def mor_symbolic_regression_loop(
+    target_expression: str,
+    target_data: dict[str, Tensor],
+    target_values: Tensor,
+    max_steps: int = 5,
+    epochs_per_step: int = 1000,
+    lr: float = 0.01,
+) -> tuple[str, float]:
+    """
+    Mixture-of-Recursions (MoR) loop with Hybrid-AI gating.
+    Trains depth=1 blocks iteratively, wrapping residuals.
+    """
+    variables = {k: v.clone() for k, v in target_data.items()}
+    formulas = {k: k for k in target_data.keys()}
+
+    best_final_mse = float("inf")
+    best_composed_formula = ""
+
+    for step in range(1, max_steps + 1):
+        # We always train a shallow depth block
+        model = train_eml_tree(
+            target_data=variables,
+            target_values=target_values,
+            depth=1,  # MoR shared block depth
+            epochs=epochs_per_step,
+            lr=lr,
+        )
+
+        # Get MSE
+        with torch.no_grad():
+            output = model(variables, temperature=0.01)
+            diff = output - target_values
+            mse = ((diff.real**2).mean() + (diff.imag**2).mean()).item()
+
+        step_formula_raw = model.get_discrete_formula()
+
+        # Substitute recursive variable formulas back
+        step_formula = step_formula_raw
+        for var_name, var_expr in sorted(
+            formulas.items(), key=lambda item: len(item[0]), reverse=True
+        ):
+            if var_name != "x":
+                step_formula = step_formula.replace(var_name, f"{var_expr}")
+
+        best_final_mse = mse
+        best_composed_formula = step_formula
+
+        # 1. Perception NN evaluates
+        nn_outputs = simulated_perception_nn(mse)
+
+        # 2. Hybrid-AI gating logic
+        halt = mcculloch_pitts_gate(nn_outputs, threshold=0.5)
+
+        if halt:
+            break
+
+        # Continue recursion: wrap current output as a new intermediate variable
+        new_var_name = f"h_{step}"
+        variables[new_var_name] = output.detach().clone()
+        formulas[new_var_name] = step_formula_raw
+
+    return best_composed_formula, best_final_mse

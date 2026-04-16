@@ -53,7 +53,7 @@ from eml_mcp.trees import EMLNode, extract_real
 try:
     import torch  # noqa: F401
 
-    from eml_mcp.regression import train_eml_tree
+    from eml_mcp.regression import mor_symbolic_regression_loop, train_eml_tree
 
     HAS_TORCH = True
 except ImportError:
@@ -649,20 +649,21 @@ def eml_master_tree(
 )
 def eml_symbolic_regression(
     target_expression: str,
-    depth: int = 2,
+    depth: int = 5,
     epochs: int = 1000,
     lr: float = 0.01,
 ):
     """Perform gradient-based symbolic regression to recover an EML formula.
 
-    This tool uses PyTorch to optimize a 'Master Formula Tree' against numerical
-    data generated from the target expression. It attempts to find the exact
-    EML identity by learning the optimal discrete structural weights.
+    This tool uses PyTorch to optimize a Mixture-of-Recursions (MoR) network
+    against numerical data generated from the target expression. It attempts
+    to find the exact EML identity by learning the optimal discrete structural
+    weights and iteratively applying a shared structural block.
 
     Args:
         target_expression: Python expression for target function (e.g., 'math.exp(x)').
-        depth: Search depth (1-4). Depth 3+ is unstable.
-        epochs: Number of training epochs (default: 1000).
+        depth: Maximum search steps/recursions for MoR (1-5).
+        epochs: Number of training epochs per step (default: 1000).
         lr: Learning rate (default: 0.01).
 
     Returns:
@@ -675,8 +676,8 @@ def eml_symbolic_regression(
             "message": "PyTorch is not installed. Install with 'uv pip install -e .[sr]'",
         }
 
-    if depth < 1 or depth > 5:
-        return {"status": "error", "message": "Depth must be between 1 and 5."}
+    if depth < 1 or depth > 10:
+        return {"status": "error", "message": "Depth must be between 1 and 10."}
 
     try:
         # Generate training data locally
@@ -690,24 +691,24 @@ def eml_symbolic_regression(
         y_tensor = torch.tensor(y_targets, dtype=torch.complex128)
 
         # Train
-        model = train_eml_tree(
+        discovered, mse = mor_symbolic_regression_loop(
+            target_expression=target_expression,
             target_data=target_data,
             target_values=y_tensor,
-            depth=depth,
-            epochs=epochs,
+            max_steps=depth,
+            epochs_per_step=epochs,
             lr=lr,
         )
-
-        discovered = model.get_formula()
 
         return {
             "status": "success",
             "discovered_formula": discovered,
-            "depth": depth,
+            "max_steps_allowed": depth,
             "target": target_expression,
+            "final_mse": mse,
             "training_summary": (
-                f"Optimized MasterTree(depth={depth}) for {epochs} epochs. "
-                f"Recovered identity: {discovered}"
+                f"Optimized MoR iterative loop (max_steps={depth}) for {epochs} epochs/step. "
+                f"Obtained formula: {discovered} with MSE {mse:.4e}"
             ),
         }
     except (RuntimeError, ValueError, TypeError) as e:
