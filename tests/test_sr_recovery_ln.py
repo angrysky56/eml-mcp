@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from eml_mcp.regression import train_eml_tree
+from eml_mcp.regression import train_eml_tree  # noqa: E402
 
 
 def test_recover_ln():

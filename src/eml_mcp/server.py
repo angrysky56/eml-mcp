@@ -200,27 +200,29 @@ def eml_discover(
 
         if results["exact_match"]:
             match = results["exact_match"]
-            response["exact_match"] = {
+            item = {
                 "name": match["name"],
                 "expression": match["expression"],
                 "mse": match["mse"],
                 "k": match.get("k", match["tree"].node_count),
                 "details": match["details"],
             }
+            if "ted" in match:
+                item["structural_distance"] = match["ted"]
+            response["exact_match"] = item
 
-        # Sort nearby cases by MSE primarily, then K
-        results["nearby_discoveries"].sort(key=lambda x: (x["mse"], x.get("k", 0)))
-
+        # Sort is now handled by DiscoveryEngine.find_target, but we ensure output format
         for near in results["nearby_discoveries"]:
-            response["nearby_discoveries"].append(
-                {
-                    "name": near["name"],
-                    "expression": near["expression"],
-                    "mse": near["mse"],
-                    "k": near.get("k", near["tree"].node_count),
-                    "details": near["details"],
-                }
-            )
+            item = {
+                "name": near["name"],
+                "expression": near["expression"],
+                "mse": near["mse"],
+                "k": near.get("k", near["tree"].node_count),
+                "details": near["details"],
+            }
+            if "ted" in near:
+                item["structural_distance"] = near["ted"]
+            response["nearby_discoveries"].append(item)
 
         return response
 

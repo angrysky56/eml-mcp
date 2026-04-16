@@ -18,7 +18,9 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
+from eml_mcp.compiler import EMLCompiler
 from eml_mcp.database import EMLFormulaDB
+from eml_mcp.similarity import tree_edit_distance
 from eml_mcp.simplifier import simplify_tree
 from eml_mcp.trees import EMLNode, var
 
@@ -417,6 +419,16 @@ class DiscoveryEngine:
         except (ValueError, TypeError, NameError, SyntaxError) as e:
             return {"status": "error", "message": f"Failed to evaluate target: {e}"}
 
+        # 2. Compile target if possible for structural ranking
+        target_tree = None
+        if target_expression:
+            try:
+                compiler = EMLCompiler(self.db)
+                target_tree = compiler.compile(target_expression)
+                # target_tree = simplify_tree(target_tree) # Optional
+            except (ValueError, SyntaxError):
+                pass
+
         best_matches = []
 
         def record_candidate(name: str, tree: EMLNode, details: str, outputs: list[complex]):
@@ -424,18 +436,27 @@ class DiscoveryEngine:
             # Remove redundant or identical values
             if any(m["name"] == name for m in best_matches):
                 return
-            best_matches.append(
-                {
-                    "name": name,
-                    "expression": tree.to_expression(),
-                    "tree": tree,
-                    "mse": mse,
-                    "details": details,
-                }
-            )
+
+            ted = None
+            if target_tree:
+                try:
+                    ted = tree_edit_distance(tree, target_tree)
+                except Exception:
+                    pass
+
+            item = {
+                "name": name,
+                "expression": tree.to_expression(),
+                "tree": tree,
+                "mse": mse,
+                "details": details,
+            }
+            if ted is not None:
+                item["ted"] = ted
+            best_matches.append(item)
 
         # 1. Check existing DB formulas
-        for f_record in self.db.list_formulas():
+        for f_record in self.db.list_formulas() if self.db else []:
             f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
             f_outputs = self._eval_tree_safe(f_tree)
             if f_outputs is not None:
@@ -465,27 +486,32 @@ class DiscoveryEngine:
 
                     if self.is_novel_and_stable(tree, check_outputs=outputs):
                         used_vars = sorted(list(self._extract_variables(tree)))
-                        name = f"discovered_{len(self.db.list_formulas())}"
-                        self.db.add_formula(
-                            name=name,
-                            description="Targeted discovery composition.",
-                            tree=tree,
-                            variables=used_vars,
-                            note="Targeted search formula.",
-                        )
-                        self.db.add_derivation(
-                            formula_name=name,
-                            parent_a=None,
-                            parent_b=None,
-                            method="targeted_composition",
-                            details=details,
-                        )
+                        # Use random suffix to avoid collisions
+                        suffix = secrets.token_hex(2)
+                        name = f"discovered_target_{suffix}"
+                        if self.db:
+                            self.db.add_formula(
+                                name=name,
+                                description="Targeted discovery composition.",
+                                tree=tree,
+                                variables=used_vars,
+                                note="Targeted search formula.",
+                            )
+                            self.db.add_derivation(
+                                formula_name=name,
+                                parent_a=None,
+                                parent_b=None,
+                                method="targeted_composition",
+                                details=details,
+                            )
                         record_candidate(name, tree, f"Composition: {details}", outputs)
                 except (OverflowError, ValueError) as e:
                     logger.debug("Composition failed during discovery: %s", e)
 
-        # Sort by MSE primarily, then K
-        best_matches.sort(key=lambda x: (x["mse"], x["tree"].node_count))
+        # Sort by MSE primarily, then TED (if available), then K
+        best_matches.sort(
+            key=lambda x: (x["mse"], x.get("ted", float("inf")), x["tree"].node_count)
+        )
 
         exact_match = None
         if best_matches and best_matches[0]["mse"] < tolerance:

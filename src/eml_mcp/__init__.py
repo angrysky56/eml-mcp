@@ -22,6 +22,8 @@ from eml_mcp.registry import (
     build_zero_tree,
     verify_eml_identity,
 )
+from eml_mcp.similarity import tree_edit_distance
+from eml_mcp.simplifier import simplify_tree
 from eml_mcp.trees import EMLNode, NodeType, const, eml_node, extract_real, var
 
 __all__ = [
@@ -50,4 +52,6 @@ __all__ = [
     "build_subtract_tree",
     "build_zero_tree",
     "verify_eml_identity",
+    "simplify_tree",
+    "tree_edit_distance",
 ]
