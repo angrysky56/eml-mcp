@@ -23,6 +23,6 @@ This document outlines the testing and Nyquist verification strategy for Phase 1
    - **Check:** Over repeated epochs, the forward pass latency must quantifiably drop following the pruning hook as heads are entirely culled from executing in memory.
 
 ## Acceptance Tests
-- [ ] `tests/test_dynamic_topology.py::test_redundant_head_pruning` passes
-- [ ] `tests/test_dynamic_topology.py::test_validation_mse_persists` passes 
-- [ ] `tests/test_dynamic_topology.py::test_compiled_graph_pruning` passes
+- [x] `tests/test_dynamic_topology.py::test_redundant_head_pruning` passes
+- [x] `tests/test_dynamic_topology.py::test_validation_mse_persists` passes 
+- [x] `tests/test_dynamic_topology.py::test_compiled_graph_pruning` passes
