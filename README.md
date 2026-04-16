@@ -15,6 +15,8 @@ Paired with the constant `1`, this operator reconstructs arithmetic, all transce
 - **Current milestone:** v2.0 (Discovery Optimization), phase 7 of 8 — see `.planning/STATE.md`.
 - **Live catalog:** [`docs/FORMULAS.md`](docs/FORMULAS.md) — auto-generated from the SQLite DB; regenerate with `uv run python scripts/export_catalog.py`.
 - **Persistence:** Every seed, compiled composition, verification result, and symbolic-regression output is written to `eml_formulas.db`. The server ships with 8 seeded primitives and accumulates more via discovery.
+- **Catalog simplification:** `scripts/migrate_simplify_catalog.py` compresses stored trees via the identity-rule simplifier. On the seeded catalog it reduces total K by ~73% (1451 → 393). New discoveries are simplified before storage automatically. See [`docs/simplifier_k_reduction.md`](docs/simplifier_k_reduction.md).
+- **Non-blocking discovery:** long searches can be launched as background jobs (`eml_discover_start` → `eml_discover_status` → `eml_discover_result`, with `eml_discover_cancel` for cooperative stop). See [`docs/async_discovery.md`](docs/async_discovery.md).
 
 ## Quick Start
 
@@ -111,6 +113,11 @@ All tools share the same database singleton, so discoveries made by one invocati
 | `eml_master_tree`         | Build a parameterized master formula tree for symbolic regression                           |
 | `eml_symbolic_regression` | Gradient-based recovery (Adam on `complex128`); snaps weights to 0/1 on success             |
 | `eml_discover`            | Evolutionary search for a formula matching a target expression; persists novel stable finds |
+| `eml_discover_start`      | Launch evolutionary search as a background job; returns job_id immediately                  |
+| `eml_discover_status`     | Poll progress of a background job (iterations_done, best_mse, best_k, best_expression)      |
+| `eml_discover_result`     | Retrieve the final result dict of a completed/cancelled job                                 |
+| `eml_discover_cancel`     | Request cooperative cancel; best-so-far is preserved                                        |
+| `eml_discover_list`       | List recent jobs (any status), newest first                                                 |
 | `eml_simplify`            | Apply identity rules (`exp(ln(x)) → x`) and constant folding; reports K reduction           |
 | `eml_similarity`          | Zhang-Shasha tree edit distance and normalized similarity between two formulas              |
 
@@ -169,6 +176,10 @@ EML is one instance of a **Minimal Generative Architecture (MGA)** — the same 
 | Evolutionary biology | 4 gene actions | Emergent morphology (OpenPraparat) |
 
 See `docs/cross_domain_exploration.md` for the extended mapping.
+
+### 6. Non-blocking long searches
+
+Long evolutionary searches can be managed asynchronously using the background job tools. You can launch a search (`eml_discover_start`), poll its progress (`eml_discover_status`), retrieve final results (`eml_discover_result`), list recent jobs (`eml_discover_list`), or stop it early while preserving the best candidate (`eml_discover_cancel`). See [`docs/async_discovery.md`](docs/async_discovery.md).
 
 ## Known limitations
 

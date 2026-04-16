@@ -30,6 +30,21 @@ from eml_mcp.trees import EMLNode, NodeType, const, var
 logger = logging.getLogger(__name__)
 
 
+class DiscoveryCancelled(Exception):
+    """Raised from inside a progress callback to stop search cooperatively.
+
+    The engine catches this at the top of the evolutionary loop, freezes
+    the current candidate list, performs the normal finalization/dedup,
+    and re-raises with the best-so-far stashed on `partial_result` so the
+    caller can still persist something useful.
+    """
+
+    def __init__(self, iteration: int = -1):
+        super().__init__(f"discovery cancelled at iteration {iteration}")
+        self.iteration = iteration
+        self.partial_result: dict[str, Any] | None = None
+
+
 def safe_eval_math(expression: str, x: complex, **kwargs: complex) -> complex:
     """Safely evaluate a mathematical expression using AST walking.
 
@@ -608,6 +623,8 @@ class DiscoveryEngine:
         tolerance: float = 1e-8,
         top_n: int = 3,
         stagnation_limit: int | None = 100,
+        progress_callback: Callable[[int, float | None, int | None, str | None], None]
+        | None = None,
         **_kwargs,
     ) -> dict[str, Any]:
         """
@@ -675,6 +692,7 @@ class DiscoveryEngine:
         # 3. Evolutionary Search Loop
         best_mse = float("inf")
         stagnation_count = 0
+        cancelled_at: int | None = None
 
         for i in range(max_iterations):
             # Sort by MSE primarily
@@ -682,6 +700,23 @@ class DiscoveryEngine:
             candidates = candidates[:10]  # Keep top 10 elites
 
             current_best_mse = candidates[0]["mse"]
+            current_best_k = candidates[0]["tree"].node_count
+            current_best_expr = str(candidates[0]["tree"])
+
+            # Progress / cancellation hook. The callback may raise
+            # DiscoveryCancelled; we catch it here so the normal finalization
+            # still runs on the best-so-far.
+            if progress_callback is not None:
+                try:
+                    progress_callback(i, current_best_mse, current_best_k, current_best_expr)
+                except DiscoveryCancelled as c:
+                    cancelled_at = c.iteration if c.iteration >= 0 else i
+                    logger.info(
+                        "Discovery cancelled at iter %d (best MSE %.2e)",
+                        cancelled_at,
+                        current_best_mse,
+                    )
+                    break
 
             # Exit if we hit tolerance
             if current_best_mse < tolerance:
@@ -763,8 +798,16 @@ class DiscoveryEngine:
                 )
 
         # Final ranking
-        # Final ranking
         candidates.sort(key=lambda x: x["mse"])
+
+        # Simplify every candidate in the top slice so K reported to the user
+        # reflects the *actual* complexity of the discovered formula, not the
+        # bloated pre-simplification tree produced by the evolutionary mutator.
+        # Simplification is semantics-preserving (exp(ln(z))→z, ln(exp(z))→z,
+        # constant folding), so MSE is unchanged up to numerical noise.
+        for c in candidates[: max(top_n, 1) + 5]:
+            if "simplified_tree" not in c:
+                c["simplified_tree"] = simplify_tree(c["tree"])
 
         # Prepare result with consistent keys to avoid KeyErrors
         result = {
@@ -772,9 +815,10 @@ class DiscoveryEngine:
             "nearby_discoveries": [
                 {
                     "name": c.get("name", f"candidate_{idx}"),
-                    "expression": str(c["tree"]),
+                    "expression": str(c["simplified_tree"]),
                     "mse": c["mse"],
-                    "k": c["tree"].node_count,
+                    "k": c["simplified_tree"].node_count,
+                    "k_before_simplify": c["tree"].node_count,
                     "details": "Existing Seed" if c.get("name") else "Mutational variant",
                     "ted": c.get("ted"),
                 }
@@ -785,6 +829,11 @@ class DiscoveryEngine:
         # Check if the best candidate is an exact match
         best_overall = candidates[0]
         if best_overall["mse"] < tolerance:
+            # Use the simplified tree for storage and reporting — the raw
+            # evolutionary tree is typically 2–5x larger and carries no extra
+            # semantic information.
+            best_tree = best_overall["simplified_tree"]
+
             # check if it was a seeded formula
             if best_overall.get("name"):
                 name = best_overall["name"]
@@ -793,13 +842,42 @@ class DiscoveryEngine:
                 # Dedup check: signature-match against the existing catalog
                 # before minting a new name. Prevents the "12 copies of
                 # exp(exp(x))" accumulation bug.
-                best_outputs = self._eval_tree_safe(best_overall["tree"])
+                best_outputs = self._eval_tree_safe(best_tree)
                 existing_name = (
                     self._find_matching_formula_by_outputs(best_outputs)
                     if best_outputs is not None
                     else None
                 )
                 if existing_name is not None:
+                    # Functionally equivalent to an existing formula. If the
+                    # new simplified K is meaningfully smaller than what the
+                    # existing formula stores, upgrade the catalog in place —
+                    # that is the whole point of discovery.
+                    existing = self.db.get_formula(existing_name)
+                    existing_k = existing.get("k", 10**9) if existing else 10**9
+                    if best_tree.node_count + 1 < existing_k:
+                        try:
+                            self.db.update_formula_tree(
+                                name=existing_name,
+                                tree=best_tree,
+                                note=(
+                                    f"K reduced from {existing_k} to "
+                                    f"{best_tree.node_count} via evolutionary "
+                                    f"search targeting '{self.target_expression}'"
+                                ),
+                            )
+                            self._cache_synced = False
+                            logger.info(
+                                "Upgraded %r: K %d → %d (target %r)",
+                                existing_name,
+                                existing_k,
+                                best_tree.node_count,
+                                self.target_expression,
+                            )
+                        except (sqlite3.Error, AttributeError) as e:
+                            # update_formula_tree is a newer method; if the
+                            # DB object doesn't have it, fall through silently.
+                            logger.debug("K-upgrade skipped (%s)", e)
                     name = existing_name
                     reused = True
                     logger.info(
@@ -809,13 +887,13 @@ class DiscoveryEngine:
                     )
                 else:
                     name = f"discovered_{secrets.token_hex(4)}"
-                    used_vars = sorted(list(self._extract_variables(best_overall["tree"])))
+                    used_vars = sorted(list(self._extract_variables(best_tree)))
 
-                    # Add new discovery to DB
+                    # Add new discovery to DB (simplified form)
                     self.db.add_formula(
                         name=name,
                         description=f"Auto-discovered matching '{self.target_expression}'",
-                        tree=best_overall["tree"],
+                        tree=best_tree,
                         variables=used_vars,
                         note=f"Targeted search best MSE: {best_overall['mse']:.2e}",
                     )
@@ -834,12 +912,22 @@ class DiscoveryEngine:
 
             result["exact_match"] = {
                 "name": name,
-                "expression": str(best_overall["tree"]),
+                "expression": str(best_tree),
                 "mse": best_overall["mse"],
-                "k": best_overall["tree"].node_count,
+                "k": best_tree.node_count,
+                "k_before_simplify": best_overall["tree"].node_count,
                 "details": f"Evolutionary match for '{self.target_expression}'",
                 "reused_existing": reused,
             }
+
+        if cancelled_at is not None:
+            # Attach what we have to a cancellation exception so the caller
+            # (typically the JobStore worker thread) can still persist the
+            # best-so-far candidate rather than losing it entirely.
+            result["cancelled_at_iteration"] = cancelled_at
+            exc = DiscoveryCancelled(iteration=cancelled_at)
+            exc.partial_result = result
+            raise exc
 
         return result
 

@@ -40,6 +40,7 @@ from fastmcp import FastMCP
 from eml_mcp.compiler import EMLCompiler
 from eml_mcp.database import EMLFormulaDB
 from eml_mcp.discovery import DiscoveryEngine, safe_eval_math
+from eml_mcp.jobs import get_job_store
 from eml_mcp.primitives import eml
 from eml_mcp.registry import (
     build_master_tree,
@@ -309,6 +310,216 @@ def eml_discover(
             exc_info=True,
         )
         return {"status": "error", "message": str(e), "error_type": type(e).__name__}
+
+
+# ==================== Async discovery (job-backed) ====================
+
+
+def _job_summary(row: dict) -> dict:
+    """Normalize a discovery_jobs row into the shape returned by MCP tools.
+
+    Strips internal columns and parses JSON blobs to dicts so clients
+    don't have to.
+    """
+    out = {
+        "job_id": row["job_id"],
+        "target_expression": row["target_expression"],
+        "status": row["status"],
+        "iterations_requested": row["iterations_requested"],
+        "iterations_done": row["iterations_done"],
+        "tolerance": row["tolerance"],
+        "workers": row["workers"],
+        "best_mse": row["best_mse"],
+        "best_k": row["best_k"],
+        "best_expression": row["best_expression"],
+        "cancel_requested": bool(row["cancel_requested"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "completed_at": row["completed_at"],
+    }
+    if row.get("error"):
+        out["error"] = row["error"]
+    if row.get("tiles_json"):
+        try:
+            out["tiles"] = json.loads(row["tiles_json"])
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
+@mcp.tool(
+    name="eml_discover_start",
+    annotations={
+        "title": "Start Background Discovery Job",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def eml_discover_start(
+    target_expression: str,
+    iterations: int = 500,
+    tolerance: float = 1e-8,
+    stagnation_limit: int = 200,
+    workers: int = 1,
+):
+    """Launch a discovery search in the background and return a job_id.
+
+    Non-blocking counterpart to `eml_discover`. Progress is persisted to
+    SQLite every few iterations, so the job survives restarts and can be
+    polled via `eml_discover_status(job_id)`. Retrieve the final result
+    with `eml_discover_result(job_id)` or stop early with
+    `eml_discover_cancel(job_id)`.
+
+    Args:
+        target_expression: Python expression, e.g. 'math.sin(x)' or 'x**3'.
+        iterations: Hard cap on evolutionary iterations (default: 500).
+        tolerance: MSE threshold below which the search considers the
+            target solved exactly (default: 1e-8).
+        stagnation_limit: Bail if best MSE hasn't improved in N iters
+            (default: 200).
+        workers: Inner parallelism for the DiscoveryEngine (default: 1).
+
+    Returns:
+        dict with `job_id` and initial `status='running'`.
+    """
+    db = get_db()
+    store = get_job_store(db)
+    job_id = store.start_job(
+        target_expression=target_expression,
+        iterations=iterations,
+        tolerance=tolerance,
+        stagnation_limit=stagnation_limit,
+        workers=workers,
+    )
+    row = store.get(job_id)
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "poll_with": f"eml_discover_status('{job_id}')",
+        **_job_summary(row),
+    }
+
+
+@mcp.tool(
+    name="eml_discover_status",
+    annotations={
+        "title": "Poll Background Discovery Job",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_discover_status(job_id: str):
+    """Return live progress for a background discovery job.
+
+    Safe to call any number of times. Status values: `running`,
+    `completed`, `cancelled`, `failed`. Progress fields (`best_mse`,
+    `best_k`, `best_expression`, `iterations_done`) update every
+    few iterations while the job runs.
+    """
+    db = get_db()
+    store = get_job_store(db)
+    row = store.get(job_id)
+    if not row:
+        return {"status": "error", "message": f"No such job: {job_id}"}
+    return _job_summary(row)
+
+
+@mcp.tool(
+    name="eml_discover_result",
+    annotations={
+        "title": "Retrieve Final Discovery Job Result",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_discover_result(job_id: str):
+    """Return the final `eml_discover` result dict for a completed job.
+
+    For jobs still running this returns the summary plus
+    `message='still running'`; for cancelled/failed jobs it returns
+    whatever partial result was captured.
+    """
+    db = get_db()
+    store = get_job_store(db)
+    row = store.get(job_id)
+    if not row:
+        return {"status": "error", "message": f"No such job: {job_id}"}
+
+    summary = _job_summary(row)
+    if row["status"] == "running":
+        return {**summary, "message": "still running — poll again shortly"}
+
+    # Parse stashed result if present
+    if row.get("result_json"):
+        try:
+            summary["result"] = json.loads(row["result_json"])
+        except json.JSONDecodeError as e:
+            summary["result_parse_error"] = str(e)
+    return summary
+
+
+@mcp.tool(
+    name="eml_discover_cancel",
+    annotations={
+        "title": "Cancel Background Discovery Job",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_discover_cancel(job_id: str):
+    """Request cancellation of a running discovery job.
+
+    Cancellation is cooperative: the worker checks the cancel flag on
+    every iteration, so latency is one iteration of the evolutionary
+    loop (typically well under a second). The best-so-far candidate is
+    still persisted as `status='cancelled'`.
+    """
+    db = get_db()
+    store = get_job_store(db)
+    if not store.get(job_id):
+        return {"status": "error", "message": f"No such job: {job_id}"}
+    ok = store.request_cancel(job_id)
+    if not ok:
+        row = store.get(job_id)
+        return {
+            "status": "noop",
+            "message": f"Job is not running (status={row['status']})",
+            "job_id": job_id,
+        }
+    return {"status": "cancel_requested", "job_id": job_id}
+
+
+@mcp.tool(
+    name="eml_discover_list",
+    annotations={
+        "title": "List Recent Discovery Jobs",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_discover_list(limit: int = 10):
+    """List the most recent discovery jobs, newest first.
+
+    Args:
+        limit: Max number of rows to return (default: 10).
+    """
+    db = get_db()
+    store = get_job_store(db)
+    rows = store.list_recent(limit=limit)
+    return {
+        "total": len(rows),
+        "jobs": [_job_summary(r) for r in rows],
+    }
 
 
 @mcp.tool(

@@ -100,6 +100,29 @@ class EMLFormulaDB:
                     mse REAL,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
+
+                CREATE TABLE IF NOT EXISTS discovery_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    target_expression TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    iterations_requested INTEGER NOT NULL,
+                    iterations_done INTEGER NOT NULL DEFAULT 0,
+                    tolerance REAL NOT NULL,
+                    stagnation_limit INTEGER,
+                    workers INTEGER NOT NULL DEFAULT 1,
+                    best_mse REAL,
+                    best_k INTEGER,
+                    best_expression TEXT,
+                    result_json TEXT,
+                    error TEXT,
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    tiles_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_jobs_status
+                    ON discovery_jobs(status, created_at DESC);
             """)
             # Migration: add signature column if missing
             try:
@@ -206,6 +229,69 @@ class EMLFormulaDB:
         """Check if a formula exists."""
         cursor = self.conn.execute("SELECT 1 FROM formulas WHERE name = ?", (name,))
         return cursor.fetchone() is not None
+
+    def update_formula_tree(
+        self,
+        name: str,
+        tree: EMLNode,
+        note: str | None = None,
+        signature: list[complex] | None = None,
+    ) -> None:
+        """Replace the tree of an existing formula.
+
+        Used by (a) the catalog-simplifier migration script to compress
+        stored trees in place, and (b) evolutionary discovery when a new
+        search finds a functionally-equivalent tree with a lower K than
+        the currently-stored form.
+
+        Preserves name, description, variables, created_at; updates
+        tree_json, rpn, expression, depth, k, leaf_count, signature,
+        updated_at, and optionally note.
+
+        Args:
+            name: Primary key of the formula to update.
+            tree: New EMLNode to persist.
+            note: Optional replacement note. If None, the existing note
+                is kept.
+            signature: Optional precomputed signature. If None, recompute
+                from the tree on TEST_POINTS.
+        """
+        if signature is None:
+            signature = tree.to_signature(TEST_POINTS)
+
+        # Build the UPDATE dynamically only if `note` is provided, so callers
+        # who just want to swap the tree don't blank the existing note.
+        fields = [
+            "tree_json = ?",
+            "rpn = ?",
+            "expression = ?",
+            "depth = ?",
+            "k = ?",
+            "leaf_count = ?",
+            "signature = ?",
+            "updated_at = datetime('now')",
+        ]
+        params: list[Any] = [
+            json.dumps(tree.to_dict()),
+            " ".join(tree.to_rpn()),
+            tree.to_expression(),
+            tree.depth,
+            tree.node_count,
+            tree.leaf_count,
+            serialize_signature(signature),
+        ]
+        if note is not None:
+            fields.append("note = ?")
+            params.append(note)
+        params.append(name)
+
+        with self.conn:
+            cursor = self.conn.execute(
+                f"UPDATE formulas SET {', '.join(fields)} WHERE name = ?",
+                params,
+            )
+            if cursor.rowcount == 0:
+                raise sqlite3.Error(f"No formula named {name!r} to update")
 
     # Derivation provenance
     def add_derivation(

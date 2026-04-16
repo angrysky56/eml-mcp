@@ -62,11 +62,11 @@ class EMLNode:
         if self.node_type == NodeType.CONST:
             v_str = f"{self.value.real}" if self.value.imag == 0 else f"{self.value}"
             return [f"{indent}CONST: {v_str}"]
-            
+
         if self.node_type == NodeType.VAR:
             val = variables.get(self.var_name, "N/A") if variables else "N/A"
             return [f"{indent}VAR '{self.var_name}': {val}"]
-            
+
         if self.node_type == NodeType.CALL:
             trace = [f"{indent}CALL '{self.func_name}':"]
             for k, v in self.args.items():
@@ -81,9 +81,9 @@ class EMLNode:
                 e_l = _safe_exp(l_val)
                 l_r = _safe_log(r_val)
                 res = e_l - l_r
-                
+
                 v_str = lambda z: f"{z.real:.4f}" if z.imag == 0 else f"{z.real:.4f}+{z.imag:.4f}j"
-                
+
                 trace = [f"{indent}EML -> {v_str(res)}"]
                 trace.append(f"{indent}  Left: exp({v_str(l_val)}) = {v_str(e_l)}")
                 trace.extend(self.left.explain(variables, depth + 2))
@@ -91,10 +91,12 @@ class EMLNode:
                 trace.extend(self.right.explain(variables, depth + 2))
                 return trace
             except Exception as e:
-                return [f"{indent}EML (ERROR: {e})", 
-                        f"{indent}  L: {self.left.to_expression()}", 
-                        f"{indent}  R: {self.right.to_expression()}"]
-            
+                return [
+                    f"{indent}EML (ERROR: {e})",
+                    f"{indent}  L: {self.left.to_expression()}",
+                    f"{indent}  R: {self.right.to_expression()}",
+                ]
+
         return [f"{indent}UNKNOWN"]
 
     @property
@@ -138,7 +140,7 @@ class EMLNode:
             return EMLNode(
                 node_type=NodeType.CALL,
                 func_name=self.func_name,
-                args={k: v.copy() for k, v in self.args.items()} if self.args else None
+                args={k: v.copy() for k, v in self.args.items()} if self.args else None,
             )
         raise ValueError(f"Unknown node type: {self.node_type}")
 
@@ -161,7 +163,9 @@ class EMLNode:
             return EMLNode(
                 node_type=NodeType.CALL,
                 func_name=self.func_name,
-                args={k: v.substitute(var_mappings) for k, v in self.args.items()} if self.args else None
+                args={k: v.substitute(var_mappings) for k, v in self.args.items()}
+                if self.args
+                else None,
             )
         raise ValueError(f"Unknown node type: {self.node_type}")
 
@@ -207,7 +211,7 @@ class EMLNode:
             return {
                 "type": "call",
                 "name": self.func_name,
-                "args": {k: v.to_dict() for k, v in self.args.items()} if self.args else {}
+                "args": {k: v.to_dict() for k, v in self.args.items()} if self.args else {},
             }
         else:
             return {
@@ -267,7 +271,9 @@ class EMLNode:
         elif node_type_str == "var":
             return cls(node_type=NodeType.VAR, var_name=data["name"])
         elif node_type_str == "call":
-            args = {k: cls.from_dict(v) for k, v in data["args"].items()} if "args" in data else None
+            args = (
+                {k: cls.from_dict(v) for k, v in data["args"].items()} if "args" in data else None
+            )
             return cls(node_type=NodeType.CALL, func_name=data["name"], args=args)
         elif node_type_str == "eml":
             left = cls.from_dict(data["left"])
