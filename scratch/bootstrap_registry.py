@@ -1,24 +1,23 @@
-import cmath
-import json
-import math
-
+"""
+Script to bootstrap the formula registry with derived formulas for Phase 7.
+"""
 from eml_mcp.database import EMLFormulaDB
 from eml_mcp.discovery import DiscoveryEngine
-from eml_mcp.simplifier import simplify_tree
-from eml_mcp.trees import EMLNode
+from eml_mcp.compiler import EMLCompiler
 
 
 def bootstrap_phase7():
+    """
+    Search for and register common mathematical targets in the formula database.
+    """
     db = EMLFormulaDB("eml_formulas.db")
     engine = DiscoveryEngine(db)
+    compiler = EMLCompiler()
 
     targets = [
         ("reciprocal", "1/x", "1/x"),
         ("divide", "x/y", "x/y"),
         ("exp_exp", "exp(exp(x))", "exp(exp(x))"),
-        # ("sin", "sin(x)", "sin(x)"), # Might be deep
-        # ("cos", "cos(x)", "cos(x)"),
-        # ("tan", "tan(x)", "tan(x)"),
     ]
 
     for name, desc, expr in targets:
@@ -28,7 +27,7 @@ def bootstrap_phase7():
             continue
 
         results = engine.find_target(
-            target_expression=expr, max_iterations=200, tolerance=1e-10
+            target=expr, max_iterations=200, tolerance=1e-10
         )
 
         if results.get("status") == "error":
@@ -37,7 +36,9 @@ def bootstrap_phase7():
 
         if results.get("exact_match"):
             match = results["exact_match"]
-            tree = match["tree"]
+            # Re-compile to get the tree since find_target returns the expression string
+            tree = compiler.compile(match["expression"])
+            
             print(
                 f"FOUND EXACT match for {name}: {match['expression']} (K={tree.node_count})"
             )

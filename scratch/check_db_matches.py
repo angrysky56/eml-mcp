@@ -1,15 +1,17 @@
-import cmath
+"""
+Utility script to check the EML database for formulas that match specific functional targets.
+"""
 import json
-import math
 
 from eml_mcp.database import EMLFormulaDB
-from eml_mcp.discovery import DiscoveryEngine
 from eml_mcp.trees import EMLNode
 
 
 def check_for_reciprocal():
+    """
+    Search the database for formulas that evaluate close to 1/x for a test point.
+    """
     db = EMLFormulaDB("eml_formulas.db")
-    engine = DiscoveryEngine(db)
 
     test_x = 2.5
     target = 1.0 / test_x
@@ -24,7 +26,7 @@ def check_for_reciprocal():
             if error < 1e-10:
                 print(f"FOUND MATCH: {f['name']} - Error: {error}")
                 print(f"Expression: {f['expression']}")
-        except:
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError):
             continue
     db.close()
 

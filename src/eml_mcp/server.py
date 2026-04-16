@@ -180,7 +180,7 @@ def eml_discover(
 
     try:
         results = engine.find_target(
-            target_expression=target_expression,
+            target=target_expression,
             max_iterations=iterations,
             top_n=top_n,
             tolerance=tolerance,
@@ -204,7 +204,7 @@ def eml_discover(
                 "name": match["name"],
                 "expression": match["expression"],
                 "mse": match["mse"],
-                "k": match.get("k", match["tree"].node_count),
+                "k": match.get("k", 0),
                 "details": match["details"],
             }
             if "ted" in match:
@@ -217,7 +217,7 @@ def eml_discover(
                 "name": near["name"],
                 "expression": near["expression"],
                 "mse": near["mse"],
-                "k": near.get("k", near["tree"].node_count),
+                "k": near.get("k", 0),
                 "details": near["details"],
             }
             if "ted" in near:
