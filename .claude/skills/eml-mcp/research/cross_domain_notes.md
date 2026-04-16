@@ -49,7 +49,8 @@ current priority. Read only if the user asks about it.
   using transcendental test points as a verification oracle. Not
   proved, but widely accepted; if broken, our `eml_verify` is a
   probabilistic rather than certain check.
-- The E-graph / equality saturation literature — relevant if someone
-  proposes replacing our ad-hoc simplifier with a proper e-graph-based
-  rewriter. Current simplifier is about 80 lines; an e-graph version
-  would be 10× larger but could prove more identities.
+- The E-graph / equality saturation literature — We have successfully
+  replaced our ad-hoc simplifier with a proper e-graph-based
+  rewriter. The current simplifier uses equality saturation with topological
+  matching and Bellman-Ford extraction, proving more identities while
+  retaining robust performance.
