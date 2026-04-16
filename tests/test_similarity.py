@@ -1,4 +1,3 @@
-import pytest
 
 from eml_mcp.similarity import tree_edit_distance
 from eml_mcp.trees import const, eml_node, var

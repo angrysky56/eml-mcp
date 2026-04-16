@@ -1,4 +1,3 @@
-import pytest
 
 from eml_mcp.simplifier import get_exp_input, get_ln_input, simplify_tree
 from eml_mcp.trees import const, eml_node, var
