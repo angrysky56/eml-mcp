@@ -2,7 +2,9 @@
 Test suite for EML Symbolic Regression recovery of exp(x).
 """
 
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")
 
 from eml_mcp.regression import train_eml_tree
 
