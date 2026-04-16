@@ -40,6 +40,15 @@ from eml_mcp.registry import (
 )
 from eml_mcp.trees import EMLNode, extract_real
 
+try:
+    import torch
+
+    from eml_mcp.regression import train_eml_tree
+
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+
 # Logging to stderr for MCP
 logging.basicConfig(
     level=logging.INFO,
@@ -241,6 +250,7 @@ def eml_discover(
     iterations: int = 100,
     top_n: int = 3,
     tolerance: float = 1e-5,
+    workers: int = 1,
 ):
     """Search for an EML formula matching a target behavior.
 
@@ -271,6 +281,7 @@ def eml_discover(
             max_iterations=iterations,
             top_n=top_n,
             tolerance=tolerance,
+            workers=workers,
         )
 
         # Structure response for clarity
@@ -697,11 +708,88 @@ def eml_master_tree(
     }
     result["recovery_rate"] = recovery_rates.get(depth, "unknown")
     result["training_notes"] = (
-        "Use torch.complex128 dtype. Clamp exp arguments to [-700, 700]. "
-        "Multi-stage: Adam training → hardening phase → weight snap to 0/1. "
+        "Use torch.complex128 dtype. Clamp exp arguments to [-100, 100]. "
+        "Multi-stage: Adam training -> weight snap to 0/1. "
         "When successful, MSE drops to ~1e-32 (machine epsilon squared)."
     )
     return result
+
+
+@mcp.tool(
+    name="eml_symbolic_regression",
+    annotations={
+        "title": "EML Symbolic Regression",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def eml_symbolic_regression(
+    target_expression: str,
+    depth: int = 2,
+    epochs: int = 1000,
+    lr: float = 0.01,
+):
+    """Perform gradient-based symbolic regression to recover an EML formula.
+
+    This tool uses PyTorch to optimize a 'Master Formula Tree' against numerical
+    data generated from the target expression. It attempts to find the exact
+    EML identity by learning the optimal discrete structural weights.
+
+    Args:
+        target_expression: Python expression for target function (e.g., 'math.exp(x)').
+        depth: Search depth (1-4). Depth 3+ is unstable.
+        epochs: Number of training epochs (default: 1000).
+        lr: Learning rate (default: 0.01).
+
+    Returns:
+        Recovery results including the discovered formula and loss statistics.
+    """
+    if not HAS_TORCH:
+        return {
+            "status": "error",
+            "message": "PyTorch is not installed. Install with 'uv pip install -e .[sr]'",
+        }
+
+    if depth < 1 or depth > 5:
+        return {"status": "error", "message": "Depth must be between 1 and 5."}
+
+    try:
+        # Generate training data locally
+        x_vals = torch.linspace(0.1, 5.0, 50, dtype=torch.complex128)
+        target_data = {"x": x_vals}
+
+        # Evaluate target_expression
+        y_targets = []
+        for v in x_vals:
+            y_targets.append(complex(safe_eval_math(target_expression, complex(v))))
+        y_tensor = torch.tensor(y_targets, dtype=torch.complex128)
+
+        # Train
+        model = train_eml_tree(
+            target_data=target_data,
+            target_values=y_tensor,
+            depth=depth,
+            epochs=epochs,
+            lr=lr,
+        )
+
+        discovered = model.get_formula()
+
+        return {
+            "status": "success",
+            "discovered_formula": discovered,
+            "depth": depth,
+            "target": target_expression,
+            "training_summary": (
+                f"Optimized MasterTree(depth={depth}) for {epochs} epochs. "
+                f"Recovered identity: {discovered}"
+            ),
+        }
+    except Exception as e:
+        logger.error("Symbolic regression failed: %s", e, exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 
 # ==================== Resources ====================

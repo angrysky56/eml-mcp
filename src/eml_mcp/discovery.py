@@ -9,6 +9,9 @@ Supports targeted formula discovery by functional proximity (MSE).
 import json
 import math
 import secrets
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 from eml_mcp.database import EMLFormulaDB
@@ -112,13 +115,14 @@ class DiscoveryEngine:
 
         return True
 
-    def explore(self, iterations: int = 100) -> list[str]:
+    def explore(self, iterations: int = 100, workers: int = 1) -> list[str]:
         """Run a novelty search to discover new stable formulas.
 
-        Implements the Novelty Search philosophy by archiving mathematically stable,
-        emergent formulas (the "Library of the Interesting") rather than solely
-        targeting specific reference functions.
+        Implements parallel execution if workers > 1.
         """
+        if workers > 1:
+            return self._explore_parallel(iterations, workers)
+
         discovered = []
         for _ in range(iterations):
             tree, details = self.generate_random_composition()
@@ -149,12 +153,35 @@ class DiscoveryEngine:
 
         return discovered
 
+    def _explore_parallel(self, total_iterations: int, workers: int) -> list[str]:
+        """Internal helper for parallel exploration."""
+        chunk_size = max(1, total_iterations // workers)
+        discovered_all = []
+
+        # We need the absolute path for the DB to ensure workers find it
+        db_path = str(Path(self.db.db_path).absolute())
+
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = []
+            for _ in range(workers):
+                futures.append(executor.submit(_explore_worker_task, chunk_size, db_path))
+
+            for future in as_completed(futures):
+                try:
+                    discovered_all.extend(future.result())
+                except Exception as e:
+                    # Log error but continue
+                    print(f"Worker failed: {e}")
+
+        return discovered_all
+
     def find_target(
         self,
-        target_evaluator: callable,
+        target_evaluator: Callable,
         max_iterations: int = 100,
         top_n: int = 3,
         tolerance: float = 1e-5,
+        workers: int = 1,
     ) -> dict[str, Any]:
         """
         Attempt to find a formula that matches target_evaluator.
@@ -198,37 +225,47 @@ class DiscoveryEngine:
                 record_candidate(f_record["name"], f_tree, "existing DB formula", f_outputs)
 
         # 2. Explore for targeted generation
-        for _ in range(max_iterations):
-            tree, details = self.generate_random_composition()
-            outputs = self._eval_tree_safe(tree)
-            if outputs is None:
-                continue
+        # If workers > 1, we share the exploration work
+        if workers > 1:
+            self.explore(max_iterations, workers=workers)
+            # Re-fetch from DB since exploration added them
+            for f_record in self.db.list_formulas():
+                f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
+                f_outputs = self._eval_tree_safe(f_tree)
+                if f_outputs is not None:
+                    record_candidate(f_record["name"], f_tree, "Parallel discovery", f_outputs)
+        else:
+            for _ in range(max_iterations):
+                tree, details = self.generate_random_composition()
+                outputs = self._eval_tree_safe(tree)
+                if outputs is None:
+                    continue
 
-            # If it's functionally new, we may save it
-            if self.is_novel_and_stable(tree, check_outputs=outputs):
-                used_vars = sorted(list(self._extract_variables(tree)))
-                rand_id = secrets.randbelow(9000) + 1000
-                actual_name = f"discovered_{tree.node_count}_{tree.depth}_{rand_id}"
+                # If it's functionally new, we may save it
+                if self.is_novel_and_stable(tree, check_outputs=outputs):
+                    used_vars = sorted(list(self._extract_variables(tree)))
+                    rand_id = secrets.randbelow(9000) + 1000
+                    actual_name = f"discovered_{tree.node_count}_{tree.depth}_{rand_id}"
 
-                self.db.add_formula(
-                    name=actual_name,
-                    description=f"Discovered via targeted search composition: {details}",
-                    tree=tree,
-                    variables=used_vars,
-                    note="Target-driven novelty search.",
-                )
-                self.db.add_derivation(
-                    formula_name=actual_name,
-                    parent_a=details["base"],
-                    parent_b=None,
-                    method="targeted_composition",
-                    details=details,
-                )
-                record_candidate(actual_name, tree, f"Composition: {details}", outputs)
-            else:
-                # Just a candidate; typically identical to an existing formula if we reach here
-                # so we don't save to DB.
-                pass
+                    self.db.add_formula(
+                        name=actual_name,
+                        description=f"Discovered via targeted search composition: {details}",
+                        tree=tree,
+                        variables=used_vars,
+                        note="Target-driven novelty search.",
+                    )
+                    self.db.add_derivation(
+                        formula_name=actual_name,
+                        parent_a=details["base"],
+                        parent_b=None,
+                        method="targeted_composition",
+                        details=details,
+                    )
+                    record_candidate(actual_name, tree, f"Composition: {details}", outputs)
+                else:
+                    # Just a candidate; typically identical to an existing formula if we reach here
+                    # so we don't save to DB.
+                    pass
 
         # Sort by MSE
         best_matches.sort(key=lambda x: x["mse"])
@@ -238,3 +275,12 @@ class DiscoveryEngine:
             exact_match = best_matches[0]
 
         return {"exact_match": exact_match, "nearby_discoveries": best_matches[:top_n]}
+
+
+def _explore_worker_task(iterations: int, db_path: str) -> list[str]:
+    """Top-level task for ProcessPoolExecutor to avoid pickling issues."""
+    db = EMLFormulaDB(db_path)
+    engine = DiscoveryEngine(db)
+    results = engine.explore(iterations, workers=1)
+    db.close()
+    return results
