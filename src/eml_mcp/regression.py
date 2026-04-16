@@ -83,7 +83,7 @@ class SelectionGate(nn.Module):
                 if c == math.e:
                     return "e"
                 # Check for small integers
-                if abs(c - round(c)) < 1e-9:
+                if math.isfinite(c) and abs(c - round(c)) < 1e-9:
                     return str(int(round(c)))
                 return str(c)
 

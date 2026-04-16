@@ -81,9 +81,7 @@ class EMLNode:
         elif self.node_type == NodeType.VAR:
             return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
         elif self.node_type == NodeType.EML:
-            return EMLNode(
-                node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy()
-            )
+            return EMLNode(node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy())
         raise ValueError(f"Unknown node type: {self.node_type}")
 
     def substitute(self, var_mappings: dict[str, EMLNode]) -> EMLNode:
@@ -117,7 +115,7 @@ class EMLNode:
         """Human-readable expression string."""
         if self.node_type == NodeType.CONST:
             v = self.value.real if self.value.imag == 0 else self.value
-            if isinstance(v, (float, int)):
+            if isinstance(v, (float, int)) and math.isfinite(v):
                 return str(int(v) if v == int(v) else v)
             return str(v)
         elif self.node_type == NodeType.VAR:

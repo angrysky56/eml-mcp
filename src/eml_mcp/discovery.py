@@ -185,7 +185,12 @@ class DiscoveryEngine:
                     continue
 
                 diff = target_val - val
-                errors.append(np.abs(diff) ** 2)
+                # Use np.square and handle potential overflows in a single step
+                with np.errstate(over="ignore"):
+                    err = np.abs(diff) ** 2
+                    if not np.isfinite(err):
+                        err = 1e6
+                errors.append(err)
             except Exception:
                 errors.append(1e6)
 
@@ -498,7 +503,7 @@ class DiscoveryEngine:
                 target_node.var_name = random.choice(["x", "y"])
             elif target_node.node_type == NodeType.CONST:
                 # Toggle between common constants
-                vals = [0.0, 1.0, 2.0, math.pi, math.e]
+                vals = [0.0, 1.0, -1.0, 0.5, 2.0, math.pi, math.e, 1j]
                 target_node.value = complex(random.choice(vals))
             else:  # Convert EML to leaf
                 leaf = random.choice([var("x"), var("y"), const(1.0)])

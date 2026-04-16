@@ -47,20 +47,16 @@ class EMLCompiler:
             return var(node.id)
 
         elif isinstance(node, ast.Constant):
-            if isinstance(node.value, int | float):
+            if isinstance(node.value, (int, float, complex)):
                 if node.value == 0:
                     formula = self.db.get_formula("zero")
                     if formula:
                         tree = EMLNode.from_dict(json.loads(formula["tree_json"]))
                         return tree.copy()
-                    raise ValueError("Formula 'zero' not found in DB")
-                elif node.value == 1:
-                    return const(1.0)
-                else:
-                    raise ValueError(
-                        f"Constant {node.value} not natively supported without derivation"
-                    )
-            raise ValueError(f"Unsupported constant: {node.value}")
+                    # Fallback if 'zero' not in DB yet
+                    return const(0.0)
+                return const(node.value)
+            raise ValueError(f"Unsupported constant type: {type(node.value)}")
 
         elif isinstance(node, ast.Call):
             if not isinstance(node.func, ast.Name):
@@ -120,5 +116,22 @@ class EMLCompiler:
 
             tree = EMLNode.from_dict(json.loads(formula["tree_json"]))
             return tree.substitute({"x": left, "y": right})
+
+        elif isinstance(node, ast.UnaryOp):
+            operand = self._visit(node.operand)
+            if isinstance(node.op, ast.USub):
+                op_name = "negate"
+            else:
+                raise ValueError(f"Unsupported unary operator: {type(node.op)}")
+
+            formula = self.db.get_formula(op_name)
+            if not formula:
+                raise ValueError(
+                    f"Unary operator {op_name!r} is not yet in the database. "
+                    "Ensure 'negate' is registered."
+                )
+
+            tree = EMLNode.from_dict(json.loads(formula["tree_json"]))
+            return tree.substitute({"x": operand})
 
         raise ValueError(f"Unsupported AST node: {type(node)}")

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: v2-discovery-optimization
 status: active
-last_updated: "2026-04-16T03:38:00.000Z"
+last_updated: "2026-04-16T06:30:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 7
+  completed_plans: 6
 ---
 
 # STATE.md — Project Memory
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-16)
 - **Phase:** 7 of 8
 - **Status:** Active
 - **Milestone:** v2.0
-- **Next action:** Systematize the derivation of higher-order identities (sin, cos, exp(exp(x))).
+- **Next action:** Derive and verify higher-order identities (sin, cos, tan, exp(exp(x))).
 
 ## Phase History
 
@@ -38,19 +38,19 @@ See: .planning/PROJECT.md (updated 2026-04-16)
 
 ## Decisions Log
 
-| Phase | Decision | Context |
-|-------|----------|---------|
-| 1-4 | Foundations | Package structure, SQLite, AST, and Initial Discovery |
-| 5 | SelectionGate Initialization | Zeros logit bias towards 1.0 to prevent early divergence |
-| 5 | EMLNode soft-clamping | Improved numerical stability for deep compositions |
-| 5 | ProcessPool parallelization | Multi-worker discovery without DB connection issues |
-| 5 | secrets for RNG | Secure and high-quality randomness in discovery |
-| 6 | Structural Ranking | Use Zhang-Shasha TED as primary tie-breaker for MSE |
+| Phase    | Decision                               | Context                                                                                                                                                                                                                                                               |
+| -------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1-4      | Foundations                            | Package structure, SQLite, AST, and Initial Discovery                                                                                                                                                                                                                 |
+| 5        | SelectionGate Initialization           | Zeros logit bias towards 1.0 to prevent early divergence                                                                                                                                                                                                              |
+| 5        | EMLNode soft-clamping                  | Improved numerical stability for deep compositions                                                                                                                                                                                                                    |
+| 5        | ProcessPool parallelization            | Multi-worker discovery without DB connection issues                                                                                                                                                                                                                   |
 | 7 (prep) | Signature-based dedup in `find_target` | Prevents duplicate rows for the same tree across repeated target searches; prerequisite for clean Phase 7 sin/cos/tan derivation. Rollout: `_find_matching_formula_by_outputs()` in discovery.py; cleanup of existing duplicates via `scripts/cleanup_duplicates.py`. |
+| 7        | Integrity Restore                      | Retroactively created Phase 5 SUMMARY and Phase 06 folder/PLAN/SUMMARY to resolve GSD rot.                                                                                                                                                                            |
 
 ## Blockers
 
 (None)
 
 ---
-*Last updated: 2026-04-16 after Phase 5 completion*
+
+_Last updated: 2026-04-16 after Phase 7 initialization_

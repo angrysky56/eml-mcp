@@ -15,7 +15,7 @@ def test_sin_discovery():
     print(f"Searching for {target}...")
     
     # We increase max_iterations because sin(x) is harder
-    results = engine.find_target(target_expression=target, max_iterations=2000, tolerance=1e-8)
+    results = engine.find_target(target=target, max_iterations=2000, tolerance=1e-8)
     
     if results.get("exact_match"):
         print(f"SUCCESS: Found {results['exact_match']['name']}")
