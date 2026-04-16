@@ -80,9 +80,7 @@ class EMLNode:
         elif self.node_type == NodeType.VAR:
             return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
         elif self.node_type == NodeType.EML:
-            return EMLNode(
-                node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy()
-            )
+            return EMLNode(node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy())
         raise ValueError(f"Unknown node type: {self.node_type}")
 
     def substitute(self, var_mappings: dict[str, EMLNode]) -> EMLNode:

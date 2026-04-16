@@ -47,9 +47,7 @@ def test_add_and_get_formula(db):
     inside = eml_node(x_var, const(1.0))
     root = eml_node(inside, const(1.0))
 
-    db.add_formula(
-        name="exp_exp", description="Double exponential", tree=root, variables=["x"]
-    )
+    db.add_formula(name="exp_exp", description="Double exponential", tree=root, variables=["x"])
 
     formula = db.get_formula("exp_exp")
     assert formula is not None
@@ -63,9 +61,7 @@ def test_add_and_get_formula(db):
 
     # Numerical check
     val = 0.5
-    assert (
-        abs(reconstructed_tree.evaluate({"x": val}) - root.evaluate({"x": val})) < 1e-10
-    )
+    assert abs(reconstructed_tree.evaluate({"x": val}) - root.evaluate({"x": val})) < 1e-10
 
 
 def test_search_formulas(db):

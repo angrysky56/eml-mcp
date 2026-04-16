@@ -80,9 +80,7 @@ class EMLCompiler:
             elif len(args) == 2:
                 return tree.substitute({"x": args[0], "y": args[1]})
             else:
-                raise ValueError(
-                    f"Unsupported number of arguments for {func_name}: {len(args)}"
-                )
+                raise ValueError(f"Unsupported number of arguments for {func_name}: {len(args)}")
 
         elif isinstance(node, ast.BinOp):
             left = self._visit(node.left)
@@ -103,9 +101,7 @@ class EMLCompiler:
 
             formula = self.db.get_formula(op_name)
             if not formula:
-                raise ValueError(
-                    f"Operator '{op_name}' not found in DB. Must be discovered first."
-                )
+                raise ValueError(f"Operator '{op_name}' not found in DB. Must be discovered first.")
 
             tree = EMLNode.from_dict(json.loads(formula["tree_json"]))
             return tree.substitute({"x": left, "y": right})

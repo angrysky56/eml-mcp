@@ -34,9 +34,7 @@ class DiscoveryEngine:
         if node.node_type == "var":
             return {node.var_name}
         elif node.node_type == "eml":
-            return self._extract_variables(node.left) | self._extract_variables(
-                node.right
-            )
+            return self._extract_variables(node.left) | self._extract_variables(node.right)
         return set()
 
     def generate_random_composition(self) -> tuple[EMLNode, dict[str, Any]]:
@@ -85,9 +83,9 @@ class DiscoveryEngine:
         if not outputs or not targets or len(outputs) != len(targets):
             return float("inf")
         try:
-            mse = sum(
-                (abs(o - t) ** 2) for o, t in zip(outputs, targets, strict=False)
-            ) / len(outputs)
+            mse = sum((abs(o - t) ** 2) for o, t in zip(outputs, targets, strict=False)) / len(
+                outputs
+            )
             return mse
         except OverflowError:
             return float("inf")
@@ -96,9 +94,7 @@ class DiscoveryEngine:
         self, tree: EMLNode, check_outputs: list[complex] | None = None
     ) -> bool:
         """Check if a tree is mathematically stable and produces novel outputs."""
-        outputs = (
-            check_outputs if check_outputs is not None else self._eval_tree_safe(tree)
-        )
+        outputs = check_outputs if check_outputs is not None else self._eval_tree_safe(tree)
         if outputs is None:
             return False
 
@@ -179,9 +175,7 @@ class DiscoveryEngine:
 
         best_matches = []
 
-        def record_candidate(
-            name: str, tree: EMLNode, details: str, outputs: list[complex]
-        ):
+        def record_candidate(name: str, tree: EMLNode, details: str, outputs: list[complex]):
             mse = self.compute_mse(outputs, target_outputs)
             # Remove redundant or identical values
             if any(m["name"] == name for m in best_matches):
@@ -201,9 +195,7 @@ class DiscoveryEngine:
             f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
             f_outputs = self._eval_tree_safe(f_tree)
             if f_outputs is not None:
-                record_candidate(
-                    f_record["name"], f_tree, "existing DB formula", f_outputs
-                )
+                record_candidate(f_record["name"], f_tree, "existing DB formula", f_outputs)
 
         # 2. Explore for targeted generation
         for _ in range(max_iterations):

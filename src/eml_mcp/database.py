@@ -105,9 +105,7 @@ class EMLFormulaDB:
             )
 
     # Formula CRUD
-    def get_formula(
-        self, name: str, include_verification: bool = True
-    ) -> dict[str, Any] | None:
+    def get_formula(self, name: str, include_verification: bool = True) -> dict[str, Any] | None:
         """Retrieve a formula by name, optionally with latest verification."""
         cursor = self.conn.execute("SELECT * FROM formulas WHERE name = ?", (name,))
         row = cursor.fetchone()
