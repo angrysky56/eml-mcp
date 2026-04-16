@@ -4,6 +4,7 @@ EML binary tree structures — EMLNode, NodeType, and factory functions.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -80,7 +81,9 @@ class EMLNode:
         elif self.node_type == NodeType.VAR:
             return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
         elif self.node_type == NodeType.EML:
-            return EMLNode(node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy())
+            return EMLNode(
+                node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy()
+            )
         raise ValueError(f"Unknown node type: {self.node_type}")
 
     def substitute(self, var_mappings: dict[str, EMLNode]) -> EMLNode:
@@ -147,7 +150,6 @@ class EMLNode:
 
         Returns None if evaluation fails or produces non-finite results.
         """
-        import math
 
         outputs = []
         for point in test_points:

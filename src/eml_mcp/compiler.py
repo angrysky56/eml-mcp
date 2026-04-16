@@ -76,7 +76,12 @@ class EMLCompiler:
 
             formula = self.db.get_formula(func_name)
             if not formula:
-                raise ValueError(f"Unknown function: {func_name}")
+                raise ValueError(
+                    f"Unknown function {func_name!r}. The compiler can only use functions "
+                    f"already registered in the database (currently: seeds + prior discoveries). "
+                    f"To derive an EML form for it first, run: "
+                    f"eml_discover(target_expression='math.{func_name}(x)')"
+                )
 
             tree = EMLNode.from_dict(json.loads(formula["tree_json"]))
 
@@ -106,7 +111,12 @@ class EMLCompiler:
 
             formula = self.db.get_formula(op_name)
             if not formula:
-                raise ValueError(f"Operator '{op_name}' not found in DB. Must be discovered first.")
+                raise ValueError(
+                    f"Operator {op_name!r} is not yet in the database. "
+                    f"Seeded operators are: add, subtract, multiply. For others "
+                    f"(e.g. divide, pow), run: "
+                    f"eml_discover(target_expression='x / y')  # or 'x**y', etc."
+                )
 
             tree = EMLNode.from_dict(json.loads(formula["tree_json"]))
             return tree.substitute({"x": left, "y": right})

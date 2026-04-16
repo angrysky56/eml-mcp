@@ -9,13 +9,21 @@ Based on Odrzywołek (2026): "All elementary functions from a single operator"
 https://arxiv.org/html/2603.21852v2
 
 Tools:
-    eml_evaluate     — Evaluate the EML operator on inputs
-    eml_compile      — Convert elementary expressions to pure EML form
-    eml_tree_info    — Inspect known EML formula trees
-    eml_verify       — Verify an EML tree against a reference function
-    eml_master_tree  — Build parameterized master formula for symbolic regression
-    eml_list_formulas — List all known EML formula decompositions
-    eml_discover      — search for a formula matching a target behavior
+    eml_evaluate            — Evaluate the EML operator on inputs
+    eml_list_formulas       — List the live formula catalog from SQLite
+    eml_tree_info           — Inspect a known EML formula tree
+    eml_compile             — Compile an elementary expression to pure EML
+    eml_verify              — Verify an EML tree against a reference function
+    eml_master_tree         — Build a parameterized master formula for SR
+    eml_symbolic_regression — Gradient-based SR (PyTorch, Adam)
+    eml_discover            — Evolutionary search for a target behavior
+    eml_simplify            — Reduce redundant compositions (exp(ln(x))→x)
+    eml_similarity          — Zhang-Shasha tree edit distance between formulas
+
+Resources:
+    eml://grammar           — The EML context-free grammar and key identities
+    eml://formulas          — Live formula catalog (JSON, from SQLite)
+    eml://complexity-table  — Complexity table from Odrzywolek (2026)
 """
 
 from __future__ import annotations
@@ -41,8 +49,9 @@ from eml_mcp.similarity import tree_edit_distance
 from eml_mcp.simplifier import simplify_tree
 from eml_mcp.trees import EMLNode, extract_real
 
+# Optional regression support (requires torch)
 try:
-    import torch
+    import torch  # noqa: F401
 
     from eml_mcp.regression import train_eml_tree
 
@@ -120,7 +129,9 @@ def eml_evaluate(x: float, y: float):
                 "exp_x": extract_real(
                     complex(math.e**x) if abs(x) < 700 else complex(float("inf"))
                 ),
-                "ln_y": extract_real(complex(math.log(y)) if y > 0 else {"requires_complex": True}),
+                "ln_y": extract_real(
+                    complex(math.log(y)) if y > 0 else {"requires_complex": True}
+                ),
             },
             "explanation": (
                 (
@@ -133,7 +144,9 @@ def eml_evaluate(x: float, y: float):
             ),
         }
     except (OverflowError, ValueError, ZeroDivisionError, ArithmeticError) as e:
-        logger.error("EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True)
+        logger.error(
+            "EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True
+        )
         return {"status": "error", "message": str(e)}
 
 
@@ -174,10 +187,6 @@ def eml_discover(
     db = get_db()
     engine = DiscoveryEngine(db)
 
-    def evaluator(x_val):
-        """Evaluate wrapper for safe AST math."""
-        return safe_eval_math(target_expression, x_val)
-
     try:
         results = engine.find_target(
             target=target_expression,
@@ -198,17 +207,19 @@ def eml_discover(
             "nearby_discoveries": [],
         }
 
-        if results.get("exact_match"):
-            match = results["exact_match"]
+        exact_match = results.get("exact_match")
+        if isinstance(exact_match, dict):
             item = {
-                "name": match["name"],
-                "expression": match["expression"],
-                "mse": match["mse"],
-                "k": match.get("k", 0),
-                "details": match["details"],
+                "name": exact_match["name"],
+                "expression": exact_match["expression"],
+                "mse": exact_match["mse"],
+                "k": exact_match.get("k", 0),
+                "details": exact_match["details"],
             }
-            if "ted" in match:
-                item["structural_distance"] = match["ted"]
+            if "ted" in exact_match:
+                item["structural_distance"] = exact_match["ted"]
+            if "reused_existing" in exact_match:
+                item["reused_existing"] = exact_match["reused_existing"]
             response["exact_match"] = item
 
         # Sort is now handled by DiscoveryEngine.find_target, but we ensure output format
@@ -226,14 +237,14 @@ def eml_discover(
 
         return response
 
-    except (ValueError, TypeError, RuntimeError) as e:
+    except (ValueError, TypeError, RuntimeError, AttributeError, KeyError) as e:
         logger.error(
             "Discovery failed for expression %r: %s",
             target_expression,
             e,
             exc_info=True,
         )
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "error_type": type(e).__name__}
 
 
 @mcp.tool(
@@ -480,9 +491,13 @@ def eml_verify(
 
     # Define reference functions
     ref_functions = {
-        "exp": lambda z: complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf")),
+        "exp": lambda z: (
+            complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf"))
+        ),
         "e": lambda _: complex(math.e),
-        "ln": lambda z: complex(math.log(z.real)) if z.real > 0 else complex(float("nan")),
+        "ln": lambda z: (
+            complex(math.log(z.real)) if z.real > 0 else complex(float("nan"))
+        ),
         "zero": lambda _: complex(0.0),
         "subtract": lambda x, y: complex(x - y),
         "negate": lambda z: complex(-z),
@@ -516,7 +531,8 @@ def eml_verify(
                 var_bindings = {"x": xv, "y": yv}
                 tree_val = tree.evaluate(var_bindings)
                 ref_val = complex(ref_fn(xv, yv))
-                error = abs(tree_val - ref_val)
+                # Cast to native Python float — see registry.verify_eml_identity
+                error = float(abs(tree_val - ref_val))
                 max_error = max(max_error, error)
                 results.append(
                     {
@@ -524,7 +540,7 @@ def eml_verify(
                         "tree_output": extract_real(tree_val),
                         "reference": extract_real(ref_val),
                         "error": error,
-                        "pass": error < tolerance,
+                        "pass": bool(error < tolerance),
                     }
                 )
             except (ValueError, ZeroDivisionError, OverflowError) as e:
@@ -536,10 +552,10 @@ def eml_verify(
                         "pass": False,
                     }
                 )
-        passed = all(r["pass"] for r in results)
+        passed = bool(all(r["pass"] for r in results))
         result = {
             "passed": passed,
-            "max_error": max_error,
+            "max_error": float(max_error),
             "tolerance": tolerance,
             "n_tests": len(results),
             "details": results,
@@ -699,12 +715,14 @@ def eml_symbolic_regression(
                 f"Recovered identity: {discovered}"
             ),
         }
-    except RuntimeError as e:
+    except (RuntimeError, ValueError, TypeError) as e:
         logger.error("Symbolic regression failed: %s", e, exc_info=True)
         return {"status": "error", "message": f"Training error: {e}"}
-    except Exception as e:
-        logger.error("Unexpected error during symbolic regression: %s", e, exc_info=True)
-        return {"status": "error", "message": f"Internal error: {e}"}
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error(
+            "Unexpected system error during symbolic regression: %s", e, exc_info=True
+        )
+        return {"status": "error", "message": f"Internal system failure: {e}"}
 
 
 @mcp.tool(
@@ -809,7 +827,9 @@ def eml_similarity(formula_a: str, formula_b: str):
         "k_a": tree_a.node_count,
         "k_b": tree_b.node_count,
         "max_possible_distance": tree_a.node_count + tree_b.node_count,
-        "similarity_score": max(0.0, 1.0 - (distance / (tree_a.node_count + tree_b.node_count))),
+        "similarity_score": max(
+            0.0, 1.0 - (distance / (tree_a.node_count + tree_b.node_count))
+        ),
     }
 
 
@@ -839,6 +859,53 @@ eml(x, y) = exp(x) - ln(y)
 ## Reference
 Odrzywołek (2026), arXiv:2603.21852v2
 """.strip()
+
+
+@mcp.resource("eml://formulas")
+def get_formula_catalog() -> str:
+    """Return the live formula catalog from the SQLite database as JSON.
+
+    This is the authoritative source for what the server currently knows.
+    Unlike the static grammar resource, this reflects every seeded, compiled,
+    and discovered formula persisted to eml_formulas.db.
+    """
+    db = get_db()
+    rows = db.list_formulas()
+    formulas = []
+    for row in rows:
+        entry = {
+            "name": row["name"],
+            "description": row["description"],
+            "expression": row["expression"],
+            "rpn": row["rpn"],
+            "depth": row["depth"],
+            "K": row["k"],
+            "leaf_count": row["leaf_count"],
+            "variables": json.loads(row["variables"]),
+        }
+        if row.get("note"):
+            entry["note"] = row["note"]
+        if row.get("created_at"):
+            entry["created_at"] = row["created_at"]
+        formulas.append(entry)
+
+    # Partition seeds vs discoveries for easier consumption
+    seeds = [f for f in formulas if not f["name"].startswith("discovered")]
+    discoveries = [f for f in formulas if f["name"].startswith("discovered")]
+
+    return json.dumps(
+        {
+            "total": len(formulas),
+            "seed_count": len(seeds),
+            "discovered_count": len(discoveries),
+            "grammar": "S → 1 | eml(S, S)",
+            "reference": "Odrzywołek (2026), arXiv:2603.21852v2",
+            "seeds": seeds,
+            "discoveries": discoveries,
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
 
 
 @mcp.resource("eml://complexity-table")

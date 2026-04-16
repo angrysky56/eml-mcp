@@ -232,28 +232,38 @@ class DiscoveryEngine:
         if not formulas:
             raise ValueError("No base formulas available to compose from")
 
+        # Defensive: drop any rows missing the fields we rely on below.
+        # These *shouldn't* exist given the NOT NULL schema constraints, but
+        # transient states (partial writes, sqlite3.Row reuse across cursors)
+        # have produced them in practice and crashed the search loop.
+        formulas = [
+            f
+            for f in formulas
+            if f.get("name") and f.get("tree_json") and f.get("variables") is not None
+        ]
+        if not formulas:
+            raise ValueError("All candidate formulas were malformed (missing name/tree_json)")
+
         # Filter by complexity if requested
         if max_complexity is not None:
-            formulas = [
-                f
-                for f in formulas
-                if json.loads(f["tree_json"]).get("node_count", 0) <= max_complexity
-            ]
+            formulas = [f for f in formulas if (f.get("k") or 0) <= max_complexity]
             if not formulas:
                 # Fallback to absolute basics if nothing fits
                 formulas = [
                     f
                     for f in (self.db.list_formulas() if self.db else [])
-                    if f["name"] in ("exp", "ln", "e", "zero")
+                    if f.get("name") in ("exp", "ln", "e", "zero")
                 ]
 
-        # Weight formulas by inverse complexity to favor simple building blocks
+        # Weight formulas by inverse complexity to favor simple building blocks.
+        # NOTE: earlier code parsed tree_json and looked up a non-existent
+        # "node_count" key, which silently made every weight uniform. The `k`
+        # column already stores the correct node count; use it directly.
         weights = []
         for f in formulas:
-            k = json.loads(f["tree_json"]).get("node_count", 1)
-            # Favor named/core formulas even more
+            k = f.get("k") or 1
             is_core = not f["name"].startswith("discovered_")
-            weight = (10.0 if is_core else 1.0) / k
+            weight = (10.0 if is_core else 1.0) / max(k, 1)
             weights.append(weight)
 
         base_record = random.choices(formulas, weights=weights, k=1)[0]
@@ -337,31 +347,43 @@ class DiscoveryEngine:
         if outputs is None:
             return False
 
-        # Sync cache if not already done
-        if not self._cache_synced:
-            self._formula_cache = []
-            if self.db:
-                for f_record in self.db.list_formulas():
-                    name = f_record["name"]
-                    sig_raw = f_record.get("signature")
-                    f_outputs = deserialize_signature(sig_raw)
+        # Delegate to the shared signature-match helper
+        return self._find_matching_formula_by_outputs(outputs) is None
 
-                    # Fallback if signature missing (transition logic)
-                    if f_outputs is None:
-                        f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
-                        f_outputs = self._eval_tree_safe(f_tree)
+    def _ensure_cache_synced(self) -> None:
+        """Populate the (name, outputs) cache from the DB if not already synced."""
+        if self._cache_synced:
+            return
+        self._formula_cache = []
+        if self.db:
+            for f_record in self.db.list_formulas():
+                name = f_record["name"]
+                sig_raw = f_record.get("signature")
+                f_outputs = deserialize_signature(sig_raw)
 
-                    if f_outputs:
-                        self._formula_cache.append((name, f_outputs))
-            self._cache_synced = True
+                # Fallback if signature missing (transition logic)
+                if f_outputs is None:
+                    f_tree = EMLNode.from_dict(json.loads(f_record["tree_json"]))
+                    f_outputs = self._eval_tree_safe(f_tree)
 
-        # Verify against all known formulas in cache to ensure novelty
-        for _, f_outputs in self._formula_cache:
-            mse = self.compute_mse(outputs, f_outputs)
-            if mse < 1e-10:
-                return False  # Matches an existing formula
+                if f_outputs:
+                    self._formula_cache.append((name, f_outputs))
+        self._cache_synced = True
 
-        return True
+    def _find_matching_formula_by_outputs(
+        self, outputs: list[complex], tolerance: float = 1e-10
+    ) -> str | None:
+        """Return the name of an existing formula whose signature matches, else None.
+
+        This is the deduplication primitive. Two formulas that produce the same
+        outputs on the standard test points are treated as functionally identical
+        (under the Schanuel-conjecture-backed transcendental sampling approach).
+        """
+        self._ensure_cache_synced()
+        for name, f_outputs in self._formula_cache:
+            if self.compute_mse(outputs, f_outputs) < tolerance:
+                return name
+        return None
 
     def explore(self, iterations: int = 100, workers: int = 1) -> list[str]:
         """Run a novelty search to discover new stable formulas.
@@ -739,25 +761,49 @@ class DiscoveryEngine:
             # check if it was a seeded formula
             if best_overall.get("name"):
                 name = best_overall["name"]
+                reused = True
             else:
-                name = f"discovered_{secrets.token_hex(4)}"
-                used_vars = sorted(list(self._extract_variables(best_overall["tree"])))
+                # Dedup check: signature-match against the existing catalog
+                # before minting a new name. Prevents the "12 copies of
+                # exp(exp(x))" accumulation bug.
+                best_outputs = self._eval_tree_safe(best_overall["tree"])
+                existing_name = (
+                    self._find_matching_formula_by_outputs(best_outputs)
+                    if best_outputs is not None
+                    else None
+                )
+                if existing_name is not None:
+                    name = existing_name
+                    reused = True
+                    logger.info(
+                        "Reusing existing formula %r (signature match for target %r)",
+                        name,
+                        self.target_expression,
+                    )
+                else:
+                    name = f"discovered_{secrets.token_hex(4)}"
+                    used_vars = sorted(list(self._extract_variables(best_overall["tree"])))
 
-                # Add new discovery to DB
-                self.db.add_formula(
-                    name=name,
-                    description=f"Auto-discovered matching '{self.target_expression}'",
-                    tree=best_overall["tree"],
-                    variables=used_vars,
-                    note=f"Targeted search best MSE: {best_overall['mse']:.2e}",
-                )
-                self.db.add_derivation(
-                    formula_name=name,
-                    parent_a=None,
-                    parent_b=None,
-                    method="evolutionary_search",
-                    details=f"Target: {self.target_expression}",
-                )
+                    # Add new discovery to DB
+                    self.db.add_formula(
+                        name=name,
+                        description=f"Auto-discovered matching '{self.target_expression}'",
+                        tree=best_overall["tree"],
+                        variables=used_vars,
+                        note=f"Targeted search best MSE: {best_overall['mse']:.2e}",
+                    )
+                    self.db.add_derivation(
+                        formula_name=name,
+                        parent_a=None,
+                        parent_b=None,
+                        method="evolutionary_search",
+                        details=f"Target: {self.target_expression}",
+                    )
+                    # Keep the cache in sync so further searches in this session
+                    # see the new formula immediately.
+                    if best_outputs is not None:
+                        self._formula_cache.append((name, best_outputs))
+                    reused = False
 
             result["exact_match"] = {
                 "name": name,
@@ -765,6 +811,7 @@ class DiscoveryEngine:
                 "mse": best_overall["mse"],
                 "k": best_overall["tree"].node_count,
                 "details": f"Evolutionary match for '{self.target_expression}'",
+                "reused_existing": reused,
             }
 
         return result

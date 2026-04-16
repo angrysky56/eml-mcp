@@ -224,7 +224,10 @@ def verify_eml_identity(
         try:
             tree_val = tree.evaluate(var_bindings)
             ref_val = complex(reference_fn(point))
-            error = abs(tree_val - ref_val)
+            # Cast to Python float — tree.evaluate may return numpy.complex128,
+            # and numpy scalars leak through abs(), max(), and comparisons as
+            # numpy.bool_/numpy.float64, which FastMCP cannot JSON-serialize.
+            error = float(abs(tree_val - ref_val))
             max_error = max(max_error, error)
             results.append(
                 {
@@ -232,7 +235,7 @@ def verify_eml_identity(
                     "tree_output": extract_real(tree_val),
                     "reference": extract_real(ref_val),
                     "error": error,
-                    "pass": error < tolerance,
+                    "pass": bool(error < tolerance),
                 }
             )
         except (ValueError, ZeroDivisionError, OverflowError) as e:
@@ -245,10 +248,10 @@ def verify_eml_identity(
                 }
             )
 
-    passed = all(r["pass"] for r in results)
+    passed = bool(all(r["pass"] for r in results))
     return {
         "passed": passed,
-        "max_error": max_error,
+        "max_error": float(max_error),
         "tolerance": tolerance,
         "n_tests": len(results),
         "details": results,

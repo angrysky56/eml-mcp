@@ -3,12 +3,18 @@
 A Model Context Protocol server implementing the **EML (Exp-Minus-Log) operator** — a single binary function that generates all standard elementary functions.
 
 ```
-eml(x, y) = exp(x) - ln(y)
+eml(x, y) = exp(x) − ln(y)
 ```
 
 Paired with the constant `1`, this operator reconstructs arithmetic, all transcendental functions, and constants including `e`, `π`, and `i`. It is the continuous-domain analogue of the NAND gate for Boolean logic.
 
 **Based on:** Odrzywołek (2026), _"All elementary functions from a single operator"_ — [arXiv:2603.21852v2](https://arxiv.org/html/2603.21852v2)
+
+## Status
+
+- **Current milestone:** v2.0 (Discovery Optimization), phase 7 of 8 — see `.planning/STATE.md`.
+- **Live catalog:** [`docs/FORMULAS.md`](docs/FORMULAS.md) — auto-generated from the SQLite DB; regenerate with `uv run python scripts/export_catalog.py`.
+- **Persistence:** Every seed, compiled composition, verification result, and symbolic-regression output is written to `eml_formulas.db`. The server ships with 8 seeded primitives and accumulates more via discovery.
 
 ## Quick Start
 
@@ -30,11 +36,13 @@ source .venv/bin/activate
 uv sync
 ```
 
+The server will create `eml_formulas.db` in its working directory on first run and seed it with the eight primitive formulas. Override the path with `EML_DB_PATH=/custom/path.db`.
+
 ## Core Idea
 
-Every elementary function — exp, ln, sin, cos, addition, multiplication, powers, roots — can be expressed as a binary tree where:
+Every elementary function — `exp`, `ln`, `sin`, `cos`, addition, multiplication, powers, roots — can be expressed as a binary tree where:
 
-- Every internal node computes `eml(left, right) = exp(left) - ln(right)`
+- Every internal node computes `eml(left, right) = exp(left) − ln(right)`
 - Every leaf is either the constant `1` or an input variable `x`
 
 The grammar is: **`S → 1 | x | eml(S, S)`**
@@ -47,22 +55,22 @@ This is the continuous analogue of how every Boolean function reduces to NAND ga
 e       = eml(1, 1)                           depth 1,  K=3
 exp(x)  = eml(x, 1)                           depth 1,  K=3
 ln(x)   = eml(1, eml(eml(1, x), 1))           depth 3,  K=7
-x - y   = eml(ln(x), exp(y))                  depth 4,  K=11
+x − y   = eml(ln(x), exp(y))                  depth 4,  K=11
 x × y   = exp(ln(x) + ln(y))                  depth 10, K=41
 ```
 
 ## Complexity Metric (K)
 
-The server reports **K** — the Kolmogorov complexity of each formula, defined as the **total node count** (internal EML nodes + leaf terminals) in the tree. This matches the paper's definition: for a full binary tree with _L_ leaves, K = 2L − 1.
+The server reports **K** — a Kolmogorov-style complexity defined as the **total node count** (internal EML nodes + leaf terminals) in the tree. This matches the paper's definition: for a full binary tree with _L_ leaves, K = 2L − 1.
 
 The server also reports **leaf_count** — the number of terminal nodes only. Both metrics are useful:
 
 - **K** (node count) — directly comparable to the paper's Table 4
 - **leaf_count** — counts the `1`'s and variables, useful for understanding tree structure
 
-### Our Trees vs. the Paper
+### Our trees vs. the paper
 
-Our compiler uses a **compositional approach** (build subtraction from ln + exp, build addition from subtraction + negation, etc.) which follows a different path than the paper's `VerifyBaseSet` bootstrapping procedure. The paper also reports results from exhaustive **direct search** (brute-force enumeration of all trees up to size N). Three values are worth tracking:
+The compiler uses a **compositional approach** (build subtraction from ln + exp, build addition from subtraction + negation, etc.) which follows a different path than the paper's `VerifyBaseSet` bootstrapping procedure. The paper also reports results from exhaustive **direct search** (brute-force enumeration of all trees up to size N). Three values are worth tracking:
 
 | Formula | Our K | Paper Compiler K | Paper Direct Search K | Notes                              |
 | ------- | ----: | ---------------: | --------------------: | ---------------------------------- |
@@ -70,53 +78,65 @@ Our compiler uses a **compositional approach** (build subtraction from ln + exp,
 | e       |     3 |                3 |                     3 | All agree — optimal                |
 | ln(x)   |     7 |                7 |                     7 | All agree — optimal                |
 | 0       |     7 |                7 |                     7 | All agree — optimal                |
-| x − y   |    11 |               83 |                    11 | We match the direct search optimum |
+| x − y   |    11 |               83 |                    11 | Matches direct search optimum      |
 | −x      |    17 |               57 |                    15 | 2 nodes above optimum              |
 | x + y   |    27 |               27 |                    19 | Matches paper compiler             |
 | x × y   |    41 |               41 |                    17 | Matches paper compiler             |
 
-**Key takeaway:** For simple primitives (exp, ln, e, zero) all methods agree. For arithmetic, our compositional compiler sometimes finds the optimal tree (subtract), sometimes matches the paper's compiler (add, multiply), and is always far better than nothing. The gap between compiler K and direct search K shows the space for future optimization — the paper notes direct search as computationally expensive but producing significantly smaller trees.
+For simple primitives (exp, ln, e, zero) all methods agree. For arithmetic, the compositional compiler sometimes matches the direct-search optimum (subtract), sometimes matches the paper's compiler (add, multiply), and is always far better than nothing. The gap between compiler K and direct-search K is the space the Discovery Engine is pointed at.
+
+## Architecture
+
+The server is organized into five layers that build on each other:
+
+1. **Primitives & trees** (`primitives.py`, `trees.py`) — the `eml()` operator with `complex128` internals, safe arithmetic, and the `EMLNode` binary-tree data structure with evaluation, RPN, and substitution.
+2. **Registry** (`registry.py`) — hand-built seed formulas (`exp`, `ln`, `e`, `zero`, `subtract`, `negate`, `add`, `multiply`) with their known compiler decompositions, plus the master-tree constructor and identity verifier.
+3. **Persistence** (`database.py`) — SQLite (`eml_formulas.db`) with four tables: `formulas`, `derivations` (provenance), `verifications` (per-tolerance results), and `regression_results`. Signatures (tree outputs on standard test points) are cached per formula to make novelty checks O(1) instead of re-evaluating trees.
+4. **Compiler & simplifier** (`compiler.py`, `simplifier.py`) — AST-based translation from Python math expressions into EML trees via registered primitives, plus identity-rule reduction (`exp(ln(x)) → x`, constant folding).
+5. **Discovery** (`discovery.py`, `regression.py`, `similarity.py`) — two complementary search strategies:
+   - **Evolutionary / novelty search** (`eml_discover`): random composition + mutation + hill climbing, ranked by MSE against the target, with Zhang-Shasha tree edit distance as a tiebreaker. Runs single-process or parallel via `ProcessPoolExecutor`.
+   - **Gradient-based symbolic regression** (`eml_symbolic_regression`): builds a parameterized master formula tree (5·2ⁿ − 6 parameters at depth _n_), optimizes with Adam on complex128 data, then snaps weights to exact 0/1.
+
+All tools share the same database singleton, so discoveries made by one invocation are immediately visible to `eml_list_formulas`, `eml_compile`, and the `eml://formulas` resource.
 
 ## Tools
 
-| Tool                | Description                                                                        |
-| ------------------- | ---------------------------------------------------------------------------------- |
-| `eml_evaluate`      | Evaluate `eml(x, y) = exp(x) - ln(y)` on given inputs                              |
-| `eml_list_formulas` | List all known EML decompositions with K, depth, and expressions                   |
-| `eml_tree_info`     | Inspect a formula's full tree structure, RPN code, and optionally evaluate         |
-| `eml_compile`       | Convert elementary expressions to pure EML form                                    |
-| `eml_verify`        | Verify an EML tree against its reference function using transcendental test points |
-| `eml_master_tree`   | Build parameterized master formula trees for symbolic regression                   |
-
-### Supported Formulas
-
-The registry currently supports:
-
-| Name       | Expression     | Aliases                 |
-| ---------- | -------------- | ----------------------- |
-| `exp`      | exp(x)         | `exp(x)`, `e^x`         |
-| `e`        | Euler's number | `euler`                 |
-| `ln`       | ln(x)          | `ln(x)`, `log(x)`       |
-| `zero`     | 0              | `0`                     |
-| `subtract` | x − y          | `x-y`, `x - y`          |
-| `negate`   | −x             | `-x`, `neg(x)`          |
-| `add`      | x + y          | `x+y`, `x + y`          |
-| `multiply` | x × y          | `x*y`, `x * y`, `x × y` |
-
-Compositions like `exp(exp(x))`, `ln(ln(x))`, `exp(ln(x))`, and `ln(exp(x))` are also supported via the compiler.
+| Tool                      | Description                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------- |
+| `eml_evaluate`            | Evaluate `eml(x, y) = exp(x) − ln(y)` on given inputs                                       |
+| `eml_list_formulas`       | List the live formula catalog from SQLite (seeds + discoveries)                             |
+| `eml_tree_info`           | Inspect a formula's full tree structure, RPN code, and optionally evaluate                  |
+| `eml_compile`             | Compile a Python math expression into an EML tree via registered primitives                 |
+| `eml_verify`              | Verify an EML tree against its reference function using transcendental test points          |
+| `eml_master_tree`         | Build a parameterized master formula tree for symbolic regression                           |
+| `eml_symbolic_regression` | Gradient-based recovery (Adam on `complex128`); snaps weights to 0/1 on success             |
+| `eml_discover`            | Evolutionary search for a formula matching a target expression; persists novel stable finds |
+| `eml_simplify`            | Apply identity rules (`exp(ln(x)) → x`) and constant folding; reports K reduction           |
+| `eml_similarity`          | Zhang-Shasha tree edit distance and normalized similarity between two formulas              |
 
 ## Resources
 
-| URI                      | Description                                     |
-| ------------------------ | ----------------------------------------------- |
-| `eml://grammar`          | The EML context-free grammar and key identities |
-| `eml://complexity-table` | Full complexity table from the paper (Table 4)  |
+| URI                      | Description                                                     |
+| ------------------------ | --------------------------------------------------------------- |
+| `eml://grammar`          | EML context-free grammar and key identities                     |
+| `eml://formulas`         | **Live** formula catalog (JSON) read directly from SQLite       |
+| `eml://complexity-table` | Full complexity table from the paper (Table 4)                  |
 
-## Use Cases
+## Formula catalog
 
-### 1. Symbolic Regression
+The live catalog is in [`docs/FORMULAS.md`](docs/FORMULAS.md) and is regenerated from the SQLite DB with:
 
-The **master formula** at level _n_ is a complete binary tree of 2ⁿ EML nodes containing ALL elementary function expressions up to that depth. Train it with gradient descent:
+```bash
+uv run python scripts/export_catalog.py
+```
+
+Currently: **8 seeded primitives** and a growing set of **discovered formulas** from prior `eml_discover` and `eml_symbolic_regression` runs. Clients can also fetch the catalog live via the `eml://formulas` resource.
+
+## Use cases
+
+### 1. Exact symbolic regression
+
+The **master formula** at level _n_ is a complete binary tree of 2ⁿ EML nodes containing every elementary function expression up to that depth. Train it with gradient descent:
 
 ```
 Level 2: 14 parameters → 100% blind recovery
@@ -126,15 +146,19 @@ Level 5: 154 parameters → 100% from perturbed correct weights
 
 When the generating law is elementary, trained weights snap from continuous values to exact 0/1 — bringing MSE to ~10⁻³² (machine epsilon squared). This is **interpretable AI**: the learned function has a closed-form expression.
 
-### 2. Complexity Analysis
+### 2. Targeted discovery with proximity fallback
 
-Measure the structural complexity of mathematical expressions on a uniform scale. EML's K provides a principled Kolmogorov-like complexity measure for elementary functions — the length of the shortest pure-EML program computing the function.
+`eml_discover` performs an evolutionary search for a target expression. If an exact match (MSE < tolerance) is found, it is persisted as a named formula with provenance. If not, the top-N nearest candidates are returned — so even a failed search is diagnostic.
 
-### 3. Verification
+### 3. Complexity analysis
 
-Verify symbolic identities numerically using algebraically independent transcendental test points (Euler-Mascheroni, Glaisher-Kinkelin constants). Under the Schanuel conjecture, coincidental agreement is vanishingly unlikely.
+Measure the structural complexity of mathematical expressions on a uniform scale. K provides a principled Kolmogorov-like complexity measure for elementary functions — the length of the shortest pure-EML program computing the function.
 
-### 4. Cross-Domain Connections
+### 4. Verification at machine precision
+
+`eml_verify` uses algebraically independent transcendental test points (Euler-Mascheroni, Glaisher-Kinkelin, φ, √2) to check a stored tree against its reference function. Under the Schanuel conjecture, coincidental agreement across these points is vanishingly unlikely.
+
+### 5. Cross-domain connections
 
 EML is one instance of a **Minimal Generative Architecture (MGA)** — the same structural pattern (minimal primitives + recursion + boundary constraints = unbounded complexity) appears across:
 
@@ -144,18 +168,51 @@ EML is one instance of a **Minimal Generative Architecture (MGA)** — the same 
 | Continuous math      | EML operator   | All elementary functions           |
 | Evolutionary biology | 4 gene actions | Emergent morphology (OpenPraparat) |
 
-## Architecture
+See `docs/cross_domain_exploration.md` for the extended mapping.
+
+## Known limitations
+
+- **Depth ceiling.** `eml_symbolic_regression` is documented stable up to depth 2 and usable but unstable at depth 3+. Depth 4+ typically requires warm-starting from perturbed correct weights. This is a numerical-stability property of the gradient descent, not a bug per se.
+- **Compiler coverage.** The AST compiler (`eml_compile`) only knows the 8 seed primitives plus whatever has been discovered into the DB. Arbitrary functions (`sin`, `cos`, `sqrt`, …) must be derived first with `eml_discover` before they can appear in a compiled expression. Error messages now include the exact `eml_discover` call to run.
+
+## Maintenance
+
+Two utility scripts, both safe to run repeatedly:
+
+```bash
+# Regenerate the human-readable catalog from the SQLite DB.
+uv run python scripts/export_catalog.py
+
+# Dedupe catalog rows that share an output signature.
+# Default is dry-run — prints the plan without mutating. Pass --apply to execute.
+uv run python scripts/cleanup_duplicates.py
+uv run python scripts/cleanup_duplicates.py --apply
+```
+
+## Project layout
 
 ```
 src/eml_mcp/
-  ├── __init__.py    — Package exports
-  ├── __main__.py    — Package entry point
-  ├── primitives.py  — EML operator and safe arithmetic
-  ├── trees.py       — Binary tree structures and NodeType
-  ├── registry.py    — Formula builders and verification logic
-  └── server.py      — FastMCP server implementation
+  ├── __init__.py        — Package exports
+  ├── __main__.py        — Package entry point
+  ├── primitives.py      — EML operator, safe arithmetic, standard test points
+  ├── trees.py           — EMLNode data structure (eval, RPN, substitution)
+  ├── registry.py        — Seed formula builders and identity verifier
+  ├── database.py        — SQLite persistence (formulas, derivations, verifications, regressions)
+  ├── compiler.py        — Python AST → EML tree compiler
+  ├── simplifier.py      — Identity-rule reduction and constant folding
+  ├── similarity.py      — Zhang-Shasha tree edit distance
+  ├── discovery.py       — Evolutionary / novelty search engine
+  ├── regression.py      — PyTorch master-tree training (optional, requires `[sr]` extra)
+  └── server.py          — FastMCP tool and resource definitions
+scripts/
+  └── export_catalog.py  — Regenerate docs/FORMULAS.md from the live DB
+tests/                   — pytest suite (formulas, compiler, discovery, similarity, SR recovery, ...)
+docs/
+  ├── FORMULAS.md                   — Auto-generated formula catalog
+  ├── cross_domain_exploration.md   — MGA cross-domain mapping
+  └── eml_transformer_architecture.md
 ```
-
 
 The core engine uses `complex128` throughout — trigonometric functions and π require complex intermediates via Euler's formula. Works cleanly with NumPy and PyTorch.
 
@@ -163,7 +220,7 @@ The core engine uses `complex128` throughout — trigonometric functions and π 
 
 - [SymbolicRegressionPackage](https://github.com/VA00/SymbolicRegressionPackage) — Odrzywołek's original EML toolkit
 - [hybrid-ai-mcp](https://github.com/angrysky56/hybrid-ai-mcp) — Boolean-domain companion (McCulloch-Pitts neurons, NAND logic)
-- [mcp-logic](https://github.com/angrysky56) — Automated reasoning server for verifying EML identities
+- [mcp-logic](https://github.com/angrysky56/mcp-logic) — Automated reasoning server for verifying EML identities
 
 ## License
 

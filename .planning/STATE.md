@@ -46,6 +46,7 @@ See: .planning/PROJECT.md (updated 2026-04-16)
 | 5 | ProcessPool parallelization | Multi-worker discovery without DB connection issues |
 | 5 | secrets for RNG | Secure and high-quality randomness in discovery |
 | 6 | Structural Ranking | Use Zhang-Shasha TED as primary tie-breaker for MSE |
+| 7 (prep) | Signature-based dedup in `find_target` | Prevents duplicate rows for the same tree across repeated target searches; prerequisite for clean Phase 7 sin/cos/tan derivation. Rollout: `_find_matching_formula_by_outputs()` in discovery.py; cleanup of existing duplicates via `scripts/cleanup_duplicates.py`. |
 
 ## Blockers
 

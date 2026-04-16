@@ -52,12 +52,12 @@ def test_compiler_invalid_syntax():
 
 def test_compiler_unknown_function():
     compiler = EMLCompiler()
-    with pytest.raises(ValueError, match="Unknown function: unknown"):
+    with pytest.raises(ValueError, match="Unknown function 'unknown'"):
         compiler.compile("unknown(x)")
 
 
 def test_compiler_unknown_operator():
     compiler = EMLCompiler()
     # The default DB does not have an 'pow' operator yet
-    with pytest.raises(ValueError, match="Operator 'pow' not found in DB"):
+    with pytest.raises(ValueError, match="Operator 'pow' is not yet in the database"):
         compiler.compile("x ** y")
