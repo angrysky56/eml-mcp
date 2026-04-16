@@ -115,11 +115,10 @@ class EMLCompiledFFN(nn.Module):
         if expr in self.unique_nodes:
             return self.unique_nodes[expr]["index"]
 
-        idx = len(self.unique_nodes)
-
         if node.node_type == NodeType.EML:
             left_idx = self._linearize(node.left)
             right_idx = self._linearize(node.right)
+            idx = len(self.unique_nodes)
             depth = 1 + max(
                 self.unique_nodes[node.left.to_expression()]["depth"],
                 self.unique_nodes[node.right.to_expression()]["depth"],
@@ -133,6 +132,7 @@ class EMLCompiledFFN(nn.Module):
             }
         else:
             # Leaf node
+            idx = len(self.unique_nodes)
             self.unique_nodes[expr] = {"index": idx, "depth": 0, "node": node}
             if node.node_type == NodeType.VAR:
                 self.leaves.append({"index": idx, "type": "var", "name": node.var_name})
@@ -252,6 +252,116 @@ class EMLCompiledFFN(nn.Module):
         if self.single_head_mode:
             return out.squeeze(-1)
         return out
+
+    def network_to_etree(self) -> list[EMLNode]:
+        """Convert the current active PyTorch matrix mapping back into symbolic EMLNodes."""
+        def build_node(idx: int) -> EMLNode:
+            if idx in self.const_indices:
+                idx_pos = (self.const_indices == idx).nonzero(as_tuple=True)[0].item()
+                val = self.const_values[idx_pos].item()
+                if isinstance(val, complex):
+                    if val.imag == 0: val = val.real
+                node = EMLNode(NodeType.CONST, value=val)
+                node._tape_idx = idx
+                return node
+            elif idx in self.var_indices:
+                idx_pos = (self.var_indices == idx).nonzero(as_tuple=True)[0].item()
+                input_idx = self.var_input_indices[idx_pos].item()
+                node = EMLNode(NodeType.VAR, var_name=self.variable_names[input_idx])
+                node._tape_idx = idx
+                return node
+            else:
+                for stage in self.stages:
+                    if idx in stage.out_indices:
+                        idx_pos = (stage.out_indices == idx).nonzero(as_tuple=True)[0].item()
+                        if self.learnable:
+                            We = stage.fixed_W_e[idx_pos] + stage.delta_W_e[idx_pos]
+                            Wl = stage.fixed_W_l[idx_pos] + stage.delta_W_l[idx_pos]
+                            left_idx = We.abs().argmax().item()
+                            right_idx = Wl.abs().argmax().item()
+                        else:
+                            left_idx = stage.left_indices[idx_pos].item()
+                            right_idx = stage.right_indices[idx_pos].item()
+                        node = EMLNode(NodeType.EML, left=build_node(left_idx), right=build_node(right_idx))
+                        node._tape_idx = idx
+                        return node
+                raise ValueError(f"Index {idx} not found in nodes.")
+
+        return [build_node(r.item()) for r in self.root_indices]
+
+    def prune_redundant_features(self, etrees: list[EMLNode]) -> list[int]:
+        """Runs the E-Graph simplifier and returns the optimal tape indices to drop."""
+        simplified = [simplify_tree(t) for t in etrees]
+        kept_indices = set()
+        
+        def trace_required(node: EMLNode):
+            expr = node.to_expression()
+            if expr in self.node_to_idx:
+                kept_indices.add(self.node_to_idx[expr])
+            if node.node_type == NodeType.EML:
+                trace_required(node.left)
+                trace_required(node.right)
+                
+        for t in simplified:
+            trace_required(t)
+            
+        all_indices = set(range(self.num_nodes))
+        return list(all_indices - kept_indices)
+
+    def apply_symbolic_pruning(self):
+        """Zero-out weights connected to heads strictly classified outside the optimal topological selection."""
+        if not self.learnable:
+            return
+            
+        etrees = self.network_to_etree()
+        simplified = [simplify_tree(t) for t in etrees]
+        kept_indices = set()
+        
+        def rewire(node: EMLNode, orig_tape_idx: int):
+            expr = node.to_expression()
+            if expr in self.node_to_idx:
+                target_idx = self.node_to_idx[expr]
+                kept_indices.add(target_idx)
+                if node.node_type == NodeType.EML:
+                    rewire(node.left, -1)
+                    rewire(node.right, -1)
+                return target_idx
+            else:
+                if node.node_type == NodeType.EML:
+                    left_idx = rewire(node.left, -1)
+                    right_idx = rewire(node.right, -1)
+                    if orig_tape_idx != -1 and left_idx != -1 and right_idx != -1:
+                        for stage in self.stages:
+                            if orig_tape_idx in stage.out_indices:
+                                idx_pos = (stage.out_indices == orig_tape_idx).nonzero(as_tuple=True)[0].item()
+                                with torch.no_grad():
+                                    stage.delta_W_e[idx_pos].zero_()
+                                    stage.delta_W_l[idx_pos].zero_()
+                                    # Snap to optimal
+                                    stage.delta_W_e[idx_pos][left_idx] = 1.0 - stage.fixed_W_e[idx_pos][left_idx]
+                                    stage.delta_W_l[idx_pos][right_idx] = 1.0 - stage.fixed_W_l[idx_pos][right_idx]
+                                    stage.bias_e[idx_pos].zero_()
+                                    stage.bias_l[idx_pos].zero_()
+                        kept_indices.add(orig_tape_idx)
+                        return orig_tape_idx
+            return -1
+
+        with torch.no_grad():
+            for i, (orig_tree, simp_tree) in enumerate(zip(etrees, simplified)):
+                r_idx = self.root_indices[i].item()
+                rewire(simp_tree, r_idx)
+                kept_indices.add(r_idx)
+                
+            for stage in self.stages:
+                for i, out_idx in enumerate(stage.out_indices):
+                    if out_idx.item() not in kept_indices:
+                        stage.delta_W_e[i].zero_()
+                        stage.delta_W_l[i].zero_()
+                        stage.bias_e[i].zero_()
+                        stage.bias_l[i].zero_()
+                        # Counteract any fixed_W selection
+                        stage.delta_W_e[i] = -stage.fixed_W_e[i]
+                        stage.delta_W_l[i] = -stage.fixed_W_l[i]
 
 
 class EMLStage(nn.Module):
