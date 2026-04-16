@@ -20,7 +20,7 @@ def test_recover_ln():
     target_data = {"x": x}
 
     # Train a depth-1 tree
-    model = train_eml_tree(target_data, y_target, depth=1, epochs=2000, lr=0.1)
+    model = train_eml_tree(target_data, y_target, depth=1, epochs=500, lr=0.1)
 
     formula = model.get_formula()
     print(f"Final Formula: {formula}")
