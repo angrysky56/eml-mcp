@@ -38,5 +38,13 @@
 1. A small transformer model is initialized with EML-derived weights.
 2. Model output matches reference function behavior within strict numerical tolerance.
 
+### Phase 9: Symbolic Attention & Recursive Embedding
+**Goal:** Implement symbolic attention mechanism and recursive token embedding. Quantify EML Transformer performance against standard MLP topologies.
+**Requirements:** MODEL-04, MODEL-05
+**Success Criteria:**
+1. Transformer attention mechanism can selectively weight specific EML-derived functional basis heads.
+2. Previously discovered identities (sin, cos) can be injected as primitive tokens for recursive scaling.
+3. Performance benchmarks compare analytical EML network vs standard MLP parameter counts.
+
 ---
 *Roadmap updated: 2026-04-16*
