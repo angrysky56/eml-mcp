@@ -33,7 +33,9 @@ class SelectionGate(nn.Module):
 
     def forward(self, variables: dict[str, Tensor], temperature: float = 1.0) -> Tensor:
         """Compute the weighted combination of inputs."""
-        probs = torch.softmax(self.selection_logits / (temperature + 1e-8), dim=0).to(torch.complex128)
+        probs = torch.softmax(self.selection_logits / (temperature + 1e-8), dim=0).to(
+            torch.complex128
+        )
 
         inputs = []
         # Variables
@@ -87,12 +89,18 @@ class EMLNode(nn.Module):
         threshold = 50.0
         x_real = x.real
         # Above threshold: threshold + log(1 + x - threshold)
-        x_real = torch.where(x_real > threshold, threshold + torch.log(1.0 + x_real - threshold), x_real)
+        x_real = torch.where(
+            x_real > threshold, threshold + torch.log(1.0 + x_real - threshold), x_real
+        )
         # Below -threshold: -threshold - log(1 - (x + threshold))
-        x_real = torch.where(x_real < -threshold, -threshold - torch.log(1.0 - (x_real + threshold)), x_real)
-        
+        x_real = torch.where(
+            x_real < -threshold,
+            -threshold - torch.log(1.0 - (x_real + threshold)),
+            x_real,
+        )
+
         exp_x = torch.exp(torch.complex(x_real, x.imag))
-        
+
         # Clip magnitude of exp_x for stability while preserving phase
         exp_x = torch.polar(exp_x.abs().clamp(max=1e30), exp_x.angle())
 
@@ -163,16 +171,19 @@ def train_eml_tree(
     for epoch in range(epochs):
         # Temperature schedule: start high (1.0), decay to low (0.01)
         temp = max(0.01, 1.0 * (0.999**epoch))
-        
+
         optimizer.zero_grad()
         output = model(target_data, temperature=temp)
 
         # Huber Loss is more robust to outliers (large initial errors)
-        loss = F.huber_loss(output.real, target_values.real, delta=1.0) + \
-               F.huber_loss(output.imag, target_values.imag, delta=1.0)
+        loss = F.huber_loss(output.real, target_values.real, delta=1.0) + F.huber_loss(
+            output.imag, target_values.imag, delta=1.0
+        )
 
         if torch.isnan(loss) or torch.isinf(loss):
-            print(f"Stopping at epoch {epoch}: Invalid loss ({loss.item()}) encountered.")
+            print(
+                f"Stopping at epoch {epoch}: Invalid loss ({loss.item()}) encountered."
+            )
             break
 
         loss.backward()
@@ -183,7 +194,7 @@ def train_eml_tree(
             if param.grad is not None and torch.isnan(param.grad).any():
                 print(f"NaN gradient in {name} at epoch {epoch}")
                 has_nan_grad = True
-        
+
         if has_nan_grad:
             print(f"Stopping at epoch {epoch} due to NaN gradients.")
             break

@@ -27,7 +27,7 @@ def test_recover_ln():
     # (Testing behavior because there are many equivalent EML forms)
     with torch.no_grad():
         test_x = torch.tensor([2.0, 3.5, 10.0], dtype=torch.complex128)
-        output = model({"x": test_x})
+        output = model({"x": test_x}, temperature=0.01)
         expected = 1.0 - torch.log(test_x)
         mse = ((output - expected).abs() ** 2).mean()
         print(f"MSE on unseen data: {mse:.2e}")
