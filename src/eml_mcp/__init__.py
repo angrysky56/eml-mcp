@@ -5,9 +5,10 @@ All elementary functions from a single binary operator, based on Odrzywołek (20
 Reference: https://arxiv.org/html/2603.21852v2
 """
 
+from eml_mcp.database import EMLFormulaDB
 from eml_mcp.primitives import DTYPE, EXP_CLAMP_MAX, EXP_CLAMP_MIN, eml, eml_array
 from eml_mcp.registry import (
-    KNOWN_FORMULAS,
+    SEED_FORMULAS,
     build_add_tree,
     build_e_tree,
     build_exp_from_subtree,
@@ -35,7 +36,8 @@ __all__ = [
     "eml_node",
     "extract_real",
     "var",
-    "KNOWN_FORMULAS",
+    "EMLFormulaDB",
+    "SEED_FORMULAS",
     "build_add_tree",
     "build_e_tree",
     "build_exp_from_subtree",

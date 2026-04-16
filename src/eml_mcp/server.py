@@ -15,24 +15,26 @@ Tools:
     eml_verify       — Verify an EML tree against a reference function
     eml_master_tree  — Build parameterized master formula for symbolic regression
     eml_list_formulas — List all known EML formula decompositions
+    eml_discover      — search for a formula matching a target behavior
 """
 
 from __future__ import annotations
 
+import ast
+import json
 import logging
 import math
+import operator
 import sys
 from typing import Any
 
 from fastmcp import FastMCP
 
+from eml_mcp.compiler import EMLCompiler
+from eml_mcp.database import EMLFormulaDB
+from eml_mcp.discovery import DiscoveryEngine
 from eml_mcp.primitives import eml
 from eml_mcp.registry import (
-    KNOWN_FORMULAS,
-    build_exp_from_subtree,
-    build_exp_tree,
-    build_ln_from_subtree,
-    build_ln_tree,
     build_master_tree,
     verify_eml_identity,
 )
@@ -48,6 +50,121 @@ logger = logging.getLogger(__name__)
 
 # Initialize MCP server
 mcp = FastMCP("eml-mcp")
+
+# Database singleton
+_db: EMLFormulaDB | None = None
+
+
+def get_db() -> EMLFormulaDB:
+    """Get or create the database singleton."""
+    global _db
+    if _db is None:
+        _db = EMLFormulaDB()
+    return _db
+
+
+def safe_eval_math(expression: str, x: complex) -> complex:
+    """Safely evaluate a mathematical expression using AST walking.
+
+    Acts as a 'Feature Filter' to ensure the target expression is within
+    the engine's mathematical domain.
+    """
+    import cmath
+
+    # Explicit whitelist of allowed operations
+    operators = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Pow: operator.pow,
+        ast.USub: operator.neg,
+        ast.UAdd: lambda v: v,
+    }
+
+    # Highly inclusive library of math/cmath primitives
+    functions = {
+        # Exponential/Log
+        "exp": cmath.exp,
+        "log": cmath.log,
+        "ln": cmath.log,
+        "log10": cmath.log10,
+        "sqrt": cmath.sqrt,
+        # Trig
+        "sin": cmath.sin,
+        "cos": cmath.cos,
+        "tan": cmath.tan,
+        "asin": cmath.asin,
+        "acos": cmath.acos,
+        "atan": cmath.atan,
+        # Hyperbolic
+        "sinh": cmath.sinh,
+        "cosh": cmath.cosh,
+        "tanh": cmath.tanh,
+        # Other
+        "abs": abs,
+        "phase": cmath.phase,
+        "polar": cmath.polar,
+        "rect": cmath.rect,
+    }
+
+    # Allowed variables and constants
+    constants = {
+        "x": x,
+        "pi": math.pi,
+        "e": math.e,
+        "tau": getattr(math, "tau", 6.283185307179586),
+        "j": 1j,
+    }
+
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        elif isinstance(node, ast.BinOp):
+            return operators[type(node.op)](_eval(node.left), _eval(node.right))
+        elif isinstance(node, ast.UnaryOp):
+            return operators[type(node.op)](_eval(node.operand))
+        elif isinstance(node, ast.Call):
+            name = ""
+            if isinstance(node.func, ast.Name):
+                name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+
+            if name not in functions:
+                raise ValueError(
+                    f"Function '{name}' is not in the system's supported mathematical domain."
+                )
+            return functions[name](*[_eval(arg) for arg in node.args])
+        elif isinstance(node, ast.Name):
+            if node.id in constants:
+                return constants[node.id]
+            if node.id in ("math", "cmath"):
+                return node.id
+            raise ValueError(
+                f"Reference '{node.id}' is not a recognized constant or variable."
+            )
+        elif isinstance(node, ast.Constant):
+            return complex(node.value)
+        elif isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id in ("math", "cmath"):
+                if node.attr in functions:
+                    return functions[node.attr]
+                if node.attr in constants:
+                    return constants[node.attr]
+            raise ValueError(f"Attribute access '.{node.attr}' is restricted.")
+        else:
+            raise TypeError(
+                f"Expression uses '{type(node).__name__}' which is outside the system's focus."
+            )
+
+    try:
+        tree = ast.parse(expression, mode="eval")
+        return complex(_eval(tree))
+    except Exception as e:
+        if isinstance(e, ValueError | TypeError):
+            raise e
+        raise ValueError(f"Could not calculate expression: {e}") from e
 
 
 # ==================== MCP Tools ====================
@@ -94,7 +211,9 @@ def eml_evaluate(x: float, y: float):
                 "exp_x": extract_real(
                     complex(math.e**x) if abs(x) < 700 else complex(float("inf"))
                 ),
-                "ln_y": extract_real(complex(math.log(y)) if y > 0 else {"requires_complex": True}),
+                "ln_y": extract_real(
+                    complex(math.log(y)) if y > 0 else {"requires_complex": True}
+                ),
             },
             "explanation": (
                 (
@@ -106,8 +225,99 @@ def eml_evaluate(x: float, y: float):
                 else f"Result computed in complex domain: {result}"
             ),
         }
+    except (OverflowError, ValueError, ZeroDivisionError, ArithmeticError) as e:
+        logger.error(
+            "EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True
+        )
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(
+    name="eml_discover",
+    annotations={
+        "title": "Discover EML Formula",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def eml_discover(
+    target_expression: str,
+    iterations: int = 100,
+    top_n: int = 3,
+    tolerance: float = 1e-5,
+):
+    """Search for an EML formula matching a target behavior.
+
+    Implements Targeted Discovery with Open-Ended Proximity.
+    If an exact match is not found, the system returns the top N
+    "nearby" formulas based on Mean Squared Error (MSE).
+
+    Args:
+        target_expression: Python expression for target function (e.g., 'x**2', 'math.sin(x)').
+        iterations: Number of composition iterations to run (default: 100).
+        top_n: Number of nearby discoveries to return if no exact match (default: 3).
+        tolerance: Distance threshold for considering a match "exact" (default: 1e-5).
+
+    Returns:
+        dict with exact_match and nearby_discoveries.
+    """
+
+    db = get_db()
+    engine = DiscoveryEngine(db)
+
+    def evaluator(x_val):
+        """Wrapper for safe AST evaluation."""
+        return safe_eval_math(target_expression, x_val)
+
+    try:
+        results = engine.find_target(
+            target_evaluator=evaluator,
+            max_iterations=iterations,
+            top_n=top_n,
+            tolerance=tolerance,
+        )
+
+        # Structure response for clarity
+        if results.get("error"):
+            return results
+
+        response = {
+            "status": "success",
+            "iterations": iterations,
+            "exact_match": None,
+            "nearby_discoveries": [],
+        }
+
+        if results["exact_match"]:
+            match = results["exact_match"]
+            response["exact_match"] = {
+                "name": match["name"],
+                "expression": match["expression"],
+                "mse": match["mse"],
+                "details": match["details"],
+            }
+
+        for near in results["nearby_discoveries"]:
+            response["nearby_discoveries"].append(
+                {
+                    "name": near["name"],
+                    "expression": near["expression"],
+                    "mse": near["mse"],
+                    "details": near["details"],
+                }
+            )
+
+        return response
+
     except Exception as e:
-        logger.error(f"Error evaluating EML: {e}")
+        logger.error(
+            "Discovery failed for expression %r: %s",
+            target_expression,
+            e,
+            exc_info=True,
+        )
         return {"status": "error", "message": str(e)}
 
 
@@ -130,20 +340,21 @@ def eml_list_formulas():
     Returns:
         dict with formula names, descriptions, depths, and leaf counts.
     """
+    db = get_db()
+    rows = db.list_formulas()
     formulas = {}
-    for name, info in KNOWN_FORMULAS.items():
-        tree = info["builder"]()
-        formulas[name] = {
-            "description": info["description"],
-            "depth": info["depth"],
-            "K": info["K"],
-            "leaf_count": tree.leaf_count,
-            "variables": info["variables"],
-            "expression": tree.to_expression(),
-            "rpn": " ".join(tree.to_rpn()),
+    for row in rows:
+        formulas[row["name"]] = {
+            "description": row["description"],
+            "depth": row["depth"],
+            "K": row["k"],
+            "leaf_count": row["leaf_count"],
+            "variables": json.loads(row["variables"]),
+            "expression": row["expression"],
+            "rpn": row["rpn"],
         }
-        if "note" in info:
-            formulas[name]["note"] = info["note"]
+        if row.get("note"):
+            formulas[row["name"]]["note"] = row["note"]
     return {
         "formulas": formulas,
         "total": len(formulas),
@@ -178,47 +389,63 @@ def eml_tree_info(
     Returns:
         dict with tree structure, expression, RPN, depth, and optional result.
     """
-    if formula_name not in KNOWN_FORMULAS:
-        available = list(KNOWN_FORMULAS.keys())
+    db = get_db()
+    row = db.get_formula(formula_name)
+    if row is None:
+        available = [r["name"] for r in db.list_formulas()]
         return {
             "status": "error",
             "message": f"Unknown formula '{formula_name}'",
             "available": available,
         }
 
-    info = KNOWN_FORMULAS[formula_name]
-    tree = info["builder"]()
+    tree_dict = json.loads(row["tree_json"])
+    tree = EMLNode.from_dict(tree_dict)
+    variables = json.loads(row["variables"])
 
     result: dict[str, Any] = {
         "name": formula_name,
-        "description": info["description"],
-        "expression": tree.to_expression(),
-        "rpn": " ".join(tree.to_rpn()),
-        "depth": tree.depth,
-        "K": tree.node_count,
-        "leaf_count": tree.leaf_count,
-        "node_count": tree.node_count,
-        "tree": tree.to_dict(),
+        "description": row["description"],
+        "expression": row["expression"],
+        "rpn": row["rpn"],
+        "depth": row["depth"],
+        "K": row["k"],
+        "leaf_count": row["leaf_count"],
+        "node_count": row["k"],
+        "tree": tree_dict,
     }
-    if "note" in info:
-        result["note"] = info["note"]
+    if row.get("note"):
+        result["note"] = row["note"]
 
-    if evaluate_at is not None and info["variables"]:
-        variables = {info["variables"][0]: complex(evaluate_at)}
+    if evaluate_at is not None and variables:
+        var_bindings = {variables[0]: complex(evaluate_at)}
         try:
-            val = tree.evaluate(variables)
+            val = tree.evaluate(var_bindings)
             result["evaluation"] = {
                 "input": evaluate_at,
                 "output": extract_real(val),
             }
-        except Exception as e:
+        except (ValueError, OverflowError, ArithmeticError) as e:
+            logger.warning(
+                "Tree evaluation failed for formula=%r at x=%s: %s",
+                formula_name,
+                evaluate_at,
+                e,
+                exc_info=True,
+            )
             result["evaluation"] = {"error": str(e)}
-    elif evaluate_at is not None and not info["variables"]:
+    elif evaluate_at is not None and not variables:
         # It's a constant, just evaluate
         try:
             val = tree.evaluate()
             result["evaluation"] = {"output": extract_real(val)}
-        except Exception as e:
+        except (ValueError, OverflowError, ArithmeticError) as e:
+            logger.warning(
+                "Constant evaluation failed for formula=%r: %s",
+                formula_name,
+                e,
+                exc_info=True,
+            )
             result["evaluation"] = {"error": str(e)}
 
     return result
@@ -248,86 +475,38 @@ def eml_compile(expression: str):
     Returns:
         dict with the EML tree, expression, RPN code, and complexity.
     """
-    # Normalize
     expr = expression.strip().lower()
+    db = get_db()
 
     # Direct formula lookup
-    if expr in KNOWN_FORMULAS:
-        tree = KNOWN_FORMULAS[expr]["builder"]()
+    row = db.get_formula(expr)
+    if row:
         return {
             "input": expression,
-            "eml_expression": tree.to_expression(),
-            "rpn": " ".join(tree.to_rpn()),
-            "depth": tree.depth,
-            "K": tree.node_count,
-            "leaf_count": tree.leaf_count,
-            "tree": tree.to_dict(),
+            "eml_expression": row["expression"],
+            "rpn": row["rpn"],
+            "depth": row["depth"],
+            "K": row["k"],
+            "leaf_count": row["leaf_count"],
+            "tree": json.loads(row["tree_json"]),
         }
 
-    # Handle common aliases
-    alias_map = {
-        "exp(x)": "exp",
-        "e^x": "exp",
-        "ln(x)": "ln",
-        "log(x)": "ln",
-        "euler": "e",
-        "0": "zero",
-        "x-y": "subtract",
-        "x - y": "subtract",
-        "-x": "negate",
-        "neg(x)": "negate",
-        "x+y": "add",
-        "x + y": "add",
-        "x*y": "multiply",
-        "x × y": "multiply",
-        "x * y": "multiply",
-    }
-    if expr in alias_map:
-        key = alias_map[expr]
-        tree = KNOWN_FORMULAS[key]["builder"]()
+    # AST-based recursive compiler
+    compiler = EMLCompiler(db)
+    try:
+        tree = compiler.compile(expr)
+        return _compile_result(expression, tree)
+    except ValueError as e:
         return {
+            "status": "error",
             "input": expression,
-            "eml_expression": tree.to_expression(),
-            "rpn": " ".join(tree.to_rpn()),
-            "depth": tree.depth,
-            "K": tree.node_count,
-            "leaf_count": tree.leaf_count,
-            "tree": tree.to_dict(),
+            "message": str(e),
+            "note": (
+                "Full compiler requires the bootstrapping chain from "
+                "Odrzywołek's VerifyBaseSet procedure. Ensure the operators or functions you use "
+                "are known to the system via the Discovery Engine."
+            ),
         }
-
-    # Handle compositions: exp(exp(x)), ln(ln(x)), exp(ln(x)), ln(exp(x))
-    if expr == "exp(exp(x))":
-        inner = build_exp_tree()
-        tree = build_exp_from_subtree(inner)
-        return _compile_result(expression, tree)
-    elif expr == "ln(ln(x))":
-        inner = build_ln_tree()
-        tree = build_ln_from_subtree(inner)
-        return _compile_result(expression, tree)
-    elif expr in ("exp(ln(x))", "x"):
-        # exp(ln(x)) = x (identity)
-        inner = build_ln_tree()
-        tree = build_exp_from_subtree(inner)
-        return _compile_result(expression, tree)
-    elif expr == "ln(exp(x))":
-        inner = build_exp_tree()
-        tree = build_ln_from_subtree(inner)
-        return _compile_result(expression, tree)
-
-    return {
-        "status": "error",
-        "input": expression,
-        "message": (
-            f"Cannot compile '{expression}' yet. "
-            f"Supported: {list(KNOWN_FORMULAS.keys())} "
-            f"plus compositions like exp(exp(x)), ln(ln(x))."
-        ),
-        "note": (
-            "Full compiler requires the bootstrapping chain from "
-            "Odrzywołek's VerifyBaseSet procedure. The complete chain "
-            "builds ~36 primitives iteratively from EML + 1."
-        ),
-    }
 
 
 def _compile_result(expression: str, tree: EMLNode):
@@ -347,7 +526,7 @@ def _compile_result(expression: str, tree: EMLNode):
     name="eml_verify",
     annotations={
         "title": "Verify EML Identity",
-        "readOnlyHint": True,
+        "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
@@ -373,21 +552,26 @@ def eml_verify(
     Returns:
         dict with pass/fail status, max error, and per-point results.
     """
-    if formula_name not in KNOWN_FORMULAS:
+    db = get_db()
+    row = db.get_formula(formula_name)
+    if row is None:
         return {
             "status": "error",
             "message": f"Unknown formula '{formula_name}'",
-            "available": list(KNOWN_FORMULAS.keys()),
+            "available": [f["name"] for f in db.list_formulas()],
         }
 
-    info = KNOWN_FORMULAS[formula_name]
-    tree = info["builder"]()
+    tree = EMLNode.from_dict(json.loads(row["tree_json"]))
 
     # Define reference functions
     ref_functions = {
-        "exp": lambda z: complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf")),
+        "exp": lambda z: (
+            complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf"))
+        ),
         "e": lambda _: complex(math.e),
-        "ln": lambda z: complex(math.log(z.real)) if z.real > 0 else complex(float("nan")),
+        "ln": lambda z: (
+            complex(math.log(z.real)) if z.real > 0 else complex(float("nan"))
+        ),
         "zero": lambda _: complex(0.0),
         "subtract": lambda x, y: complex(x - y),
         "negate": lambda z: complex(-z),
@@ -402,7 +586,7 @@ def eml_verify(
         }
 
     ref_fn = ref_functions[formula_name]
-    variables = info.get("variables", [])
+    variables = json.loads(row["variables"])
 
     # Handle multivariate formulas (two-variable: x, y)
     if len(variables) == 2:
@@ -437,6 +621,7 @@ def eml_verify(
                     {
                         "input": {"x": extract_real(xv), "y": extract_real(yv)},
                         "error": str(e),
+                        # trunk-ignore(bandit/B105)
                         "pass": False,
                     }
                 )
@@ -458,6 +643,17 @@ def eml_verify(
 
     result["formula_name"] = formula_name
     result["eml_expression"] = tree.to_expression()
+
+    # Persist to DB
+    db.add_verification(
+        formula_name=formula_name,
+        passed=result["passed"],
+        max_error=result["max_error"],
+        tolerance=tolerance,
+        n_tests=result["n_tests"],
+        details=result["details"],
+    )
+
     return result
 
 

@@ -73,6 +73,35 @@ class EMLNode:
             return 1
         return 1 + self.left.node_count + self.right.node_count
 
+    def copy(self) -> EMLNode:
+        """Create a recursive deep copy of this tree."""
+        if self.node_type == NodeType.CONST:
+            return EMLNode(node_type=NodeType.CONST, value=self.value)
+        elif self.node_type == NodeType.VAR:
+            return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
+        elif self.node_type == NodeType.EML:
+            return EMLNode(
+                node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy()
+            )
+        raise ValueError(f"Unknown node type: {self.node_type}")
+
+    def substitute(self, var_mappings: dict[str, EMLNode]) -> EMLNode:
+        """Return a new tree with variables replaced by provided subtrees."""
+        if self.node_type == NodeType.VAR and self.var_name in var_mappings:
+            return var_mappings[self.var_name].copy()
+
+        if self.node_type == NodeType.CONST:
+            return EMLNode(node_type=NodeType.CONST, value=self.value)
+        elif self.node_type == NodeType.VAR:
+            return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
+        elif self.node_type == NodeType.EML:
+            return EMLNode(
+                node_type=NodeType.EML,
+                left=self.left.substitute(var_mappings),
+                right=self.right.substitute(var_mappings),
+            )
+        raise ValueError(f"Unknown node type: {self.node_type}")
+
     def to_rpn(self) -> list[str]:
         """Convert to Reverse Polish Notation program."""
         if self.node_type == NodeType.CONST:
@@ -109,6 +138,25 @@ class EMLNode:
                 "left": self.left.to_dict(),
                 "right": self.right.to_dict(),
             }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EMLNode:
+        """Reconstruct an EMLNode tree from a dictionary (inverse of to_dict)."""
+        node_type_str = data["type"]
+        if node_type_str == "const":
+            raw = data["value"]
+            if isinstance(raw, dict):
+                value = complex(raw["real"], raw["imag"])
+            else:
+                value = complex(raw)
+            return cls(node_type=NodeType.CONST, value=value)
+        elif node_type_str == "var":
+            return cls(node_type=NodeType.VAR, var_name=data["name"])
+        elif node_type_str == "eml":
+            left = cls.from_dict(data["left"])
+            right = cls.from_dict(data["right"])
+            return cls(node_type=NodeType.EML, left=left, right=right)
+        raise ValueError(f"Unknown node type: {node_type_str}")
 
 
 def const(value: float = 1.0) -> EMLNode:

@@ -105,7 +105,7 @@ def build_multiply_tree() -> EMLNode:
     return build_exp_from_subtree(addition)
 
 
-KNOWN_FORMULAS: dict[str, dict[str, Any]] = {
+SEED_FORMULAS: dict[str, dict[str, Any]] = {
     "exp": {
         "description": "Exponential function exp(x)",
         "builder": build_exp_tree,
@@ -240,6 +240,7 @@ def verify_eml_identity(
                 {
                     "input": extract_real(point),
                     "error": str(e),
+                    # trunk-ignore(bandit/B105)
                     "pass": False,
                 }
             )

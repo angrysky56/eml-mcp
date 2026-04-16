@@ -17,7 +17,7 @@ import pytest
 
 from eml_mcp.primitives import eml
 from eml_mcp.registry import (
-    KNOWN_FORMULAS,
+    SEED_FORMULAS,
     build_add_tree,
     build_e_tree,
     build_exp_tree,
@@ -73,10 +73,10 @@ def _eval(tree: EMLNode, **variables: complex) -> complex:
 class TestTreeStructure:
     """All 8 formulas must have the documented K and depth values."""
 
-    @pytest.mark.parametrize("name", list(KNOWN_FORMULAS.keys()))
+    @pytest.mark.parametrize("name", list(SEED_FORMULAS.keys()))
     def test_formula_registered(self, name: str) -> None:
         """Verify formula properties are correctly registered."""
-        entry = KNOWN_FORMULAS[name]
+        entry = SEED_FORMULAS[name]
         assert "builder" in entry, f"{name}: missing 'builder' key"
         assert "K" in entry, f"{name}: missing 'K' key"
         assert "depth" in entry, f"{name}: missing 'depth' key"
@@ -154,9 +154,9 @@ class TestExpFormula:
         for z in TEST_POINTS_UNIVARIATE:
             result = _eval(tree, x=z).real
             expected = math.exp(z.real)
-            assert abs(result - expected) < TOLERANCE, (
-                f"exp({z.real}): EML={result}, expected={expected}"
-            )
+            assert (
+                abs(result - expected) < TOLERANCE
+            ), f"exp({z.real}): EML={result}, expected={expected}"
 
     def test_exp_via_verify(self) -> None:
         """Verify exp tree via verify_eml_identity."""
@@ -180,9 +180,9 @@ class TestLnFormula:
                 continue
             result = _eval(tree, x=z).real
             expected = math.log(z.real)
-            assert abs(result - expected) < TOLERANCE, (
-                f"ln({z.real}): EML={result}, expected={expected}"
-            )
+            assert (
+                abs(result - expected) < TOLERANCE
+            ), f"ln({z.real}): EML={result}, expected={expected}"
 
     def test_ln_via_verify(self) -> None:
         """Verify ln tree via verify_eml_identity."""
@@ -226,9 +226,9 @@ class TestSubtractFormula:
                 continue
             result = _eval(tree, x=x, y=y).real
             expected = x.real - y.real
-            assert abs(result - expected) < TOLERANCE, (
-                f"subtract({x.real}, {y.real}): EML={result}, expected={expected}"
-            )
+            assert (
+                abs(result - expected) < TOLERANCE
+            ), f"subtract({x.real}, {y.real}): EML={result}, expected={expected}"
 
 
 class TestNegateFormula:
@@ -242,9 +242,9 @@ class TestNegateFormula:
                 continue
             result = _eval(tree, x=z).real
             expected = -float(z.real)
-            assert abs(result - expected) < TOLERANCE, (
-                f"negate({z.real}): EML={result}, expected={expected}"
-            )
+            assert (
+                abs(result - expected) < TOLERANCE
+            ), f"negate({z.real}): EML={result}, expected={expected}"
 
 
 class TestAddFormula:
@@ -256,9 +256,9 @@ class TestAddFormula:
         for x, y in TEST_POINTS_BIVARIATE:
             result = _eval(tree, x=x, y=y).real
             expected = x.real + y.real
-            assert abs(result - expected) < TOLERANCE, (
-                f"add({x.real}, {y.real}): EML={result}, expected={expected}"
-            )
+            assert (
+                abs(result - expected) < TOLERANCE
+            ), f"add({x.real}, {y.real}): EML={result}, expected={expected}"
 
 
 class TestMultiplyFormula:
@@ -272,9 +272,9 @@ class TestMultiplyFormula:
                 continue
             result = _eval(tree, x=x, y=y).real
             expected = x.real * y.real
-            assert abs(result - expected) < TOLERANCE, (
-                f"multiply({x.real}, {y.real}): EML={result}, expected={expected}"
-            )
+            assert (
+                abs(result - expected) < TOLERANCE
+            ), f"multiply({x.real}, {y.real}): EML={result}, expected={expected}"
 
 
 # ---------------------------------------------------------------------------
@@ -303,5 +303,7 @@ class TestVerifyEMLIdentity:
         def wrong_ref(z: complex) -> complex:
             return complex(math.log(abs(z.real)) + 1)
 
-        result = verify_eml_identity(tree, wrong_ref, test_points=[complex(EULER_MASCHERONI)])
+        result = verify_eml_identity(
+            tree, wrong_ref, test_points=[complex(EULER_MASCHERONI)]
+        )
         assert result["passed"] is False
