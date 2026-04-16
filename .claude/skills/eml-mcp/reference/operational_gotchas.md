@@ -54,16 +54,15 @@ trees match on all six, they compute the same function.
 ## What `eml_simplify` can and can't do
 
 **Can:**
-- Collapse `exp(ln(z)) → z` and `ln(exp(z)) → z`.
-- Constant-fold `eml(c1, c2)` when both are literal numeric constants.
-- Recursively reduce from the leaves up.
+- Formally apply Equality Saturation globally across all subtrees via an E-Graph.
+- Automatically collapse identities like `exp(ln(z)) → z` and `ln(exp(z)) → z` out-of-order anywhere in the equivalence class.
+- Safely extract the minimal `k`-cost topology using Bellman-Ford graph traversal.
+- Constant-fold `eml(c1, c2)` when both are numeric constants, handling cross-branch propagation seamlessly.
 
 **Can't:**
-- Recognize algebraic identities (`x + (-x) → 0`, `x * 1 → x`).
-- Rearrange subtrees for canonical ordering.
-- Detect structurally different trees that compute the same function
-  (that's what `eml_similarity` + signature matching is for).
-- Preserve grammar purity when collapse would produce a bare constant.
+- Inherently know complex algebraic identities (e.g. `x + (-x) → 0`) unless explicitly codified as structural pattern `RULES` in `simplifier.py`.
+- Detect arbitrarily different but mathematically identical continuous features outside of its rewrite library (that's what `eml_similarity` + signature matching is for).
+- Preserve grammar purity when a mathematically optimal reduction yields a bare constant.
 
 ## Grammar purity
 
