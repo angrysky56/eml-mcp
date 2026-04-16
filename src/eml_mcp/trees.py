@@ -114,11 +114,16 @@ class EMLNode:
         """Human-readable expression string."""
         if self.node_type == NodeType.CONST:
             v = self.value.real if self.value.imag == 0 else self.value
-            return str(int(v) if isinstance(v, float) and v == int(v) else v)
+            if isinstance(v, (float, int)):
+                return str(int(v) if v == int(v) else v)
+            return str(v)
         elif self.node_type == NodeType.VAR:
             return self.var_name
         else:
             return f"eml({self.left.to_expression()}, {self.right.to_expression()})"
+
+    def __str__(self) -> str:
+        return self.to_expression()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize tree to dictionary for JSON output."""

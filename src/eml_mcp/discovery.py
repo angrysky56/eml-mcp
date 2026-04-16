@@ -722,13 +722,14 @@ class DiscoveryEngine:
             "exact_match": None,
             "nearby_discoveries": [
                 {
+                    "name": c.get("name", f"candidate_{idx}"),
                     "expression": str(c["tree"]),
                     "mse": c["mse"],
                     "k": c["tree"].node_count,
-                    "details": "Mutational variant",
+                    "details": "Existing Seed" if c.get("name") else "Mutational variant",
                     "ted": c.get("ted"),
                 }
-                for c in candidates[:top_n]
+                for idx, c in enumerate(candidates[:top_n])
             ],
         }
 
