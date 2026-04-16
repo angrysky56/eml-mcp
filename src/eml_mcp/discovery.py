@@ -107,9 +107,7 @@ def safe_eval_math(expression: str, x: complex, **kwargs: complex) -> complex:
                 return constants[node.id]
             if node.id in ("math", "cmath"):
                 return node.id
-            raise ValueError(
-                f"Reference '{node.id}' is not a recognized constant or variable."
-            )
+            raise ValueError(f"Reference '{node.id}' is not a recognized constant or variable.")
         elif isinstance(node, ast.Constant):
             return complex(node.value)
         elif isinstance(node, ast.Attribute):
@@ -324,9 +322,9 @@ class DiscoveryEngine:
         if not outputs or not targets or len(outputs) != len(targets):
             return float("inf")
         try:
-            mse = sum(
-                (abs(o - t) ** 2) for o, t in zip(outputs, targets, strict=False)
-            ) / len(outputs)
+            mse = sum((abs(o - t) ** 2) for o, t in zip(outputs, targets, strict=False)) / len(
+                outputs
+            )
             return mse
         except OverflowError:
             return float("inf")
@@ -335,9 +333,7 @@ class DiscoveryEngine:
         self, tree: EMLNode, check_outputs: list[complex] | None = None
     ) -> bool:
         """Check if a tree is mathematically stable and produces novel outputs."""
-        outputs = (
-            check_outputs if check_outputs is not None else self._eval_tree_safe(tree)
-        )
+        outputs = check_outputs if check_outputs is not None else self._eval_tree_safe(tree)
         if outputs is None:
             return False
 
@@ -390,9 +386,7 @@ class DiscoveryEngine:
             outputs = self._eval_tree_safe(tree)
 
             # Check stability: result must be finite and not absurdly large
-            if not outputs or not all(
-                cmath.isfinite(o) and abs(o) < 1e10 for o in outputs
-            ):
+            if not outputs or not all(cmath.isfinite(o) and abs(o) < 1e10 for o in outputs):
                 continue
 
             if tree and self.is_novel_and_stable(tree, check_outputs=outputs):
@@ -438,15 +432,11 @@ class DiscoveryEngine:
         candidates = []
         for _ in range(iterations):
             try:
-                tree, details = self.generate_random_composition(
-                    base_formulas=base_formulas
-                )
+                tree, details = self.generate_random_composition(base_formulas=base_formulas)
                 tree = simplify_tree(tree)
                 outputs = self._eval_tree_safe(tree)
 
-                if not outputs or not all(
-                    cmath.isfinite(o) and abs(o) < 1e10 for o in outputs
-                ):
+                if not outputs or not all(cmath.isfinite(o) and abs(o) < 1e10 for o in outputs):
                     continue
 
                 # Initial novelty check against current local state
@@ -524,11 +514,7 @@ class DiscoveryEngine:
                 pass
 
         else:  # Shrinkage (unwrap)
-            if (
-                target_node.node_type == NodeType.EML
-                and target_node.left
-                and target_node.right
-            ):
+            if target_node.node_type == NodeType.EML and target_node.left and target_node.right:
                 child = random.choice([target_node.left, target_node.right])
                 target_node.node_type = child.node_type
                 target_node.var_name = child.var_name
@@ -655,9 +641,7 @@ class DiscoveryEngine:
 
         # Ensure we have some candidates
         if not candidates:
-            candidates.append(
-                {"tree": var("x"), "mse": 1e6, "ted": 99.0, "fitness": 1e-6}
-            )
+            candidates.append({"tree": var("x"), "mse": 1e6, "ted": 99.0, "fitness": 1e-6})
 
         # 3. Evolutionary Search Loop
         for i in range(max_iterations):
@@ -720,9 +704,7 @@ class DiscoveryEngine:
 
             # Occasionally add a completely random tree to maintain diversity
             if i % 50 == 0:
-                random_tree = self.generate_random_composition(
-                    max_complexity=3, max_depth=2
-                )[0]
+                random_tree = self.generate_random_composition(max_complexity=3, max_depth=2)[0]
                 candidates.append(
                     {
                         "tree": random_tree,
@@ -757,8 +739,6 @@ class DiscoveryEngine:
             if best_overall.get("name"):
                 name = best_overall["name"]
             else:
-                import secrets
-
                 name = f"discovered_{secrets.token_hex(4)}"
                 used_vars = sorted(list(self._extract_variables(best_overall["tree"])))
 
