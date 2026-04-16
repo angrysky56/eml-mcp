@@ -147,6 +147,71 @@ def eml_evaluate(x: float, y: float):
 
 
 @mcp.tool(
+    name="eml_explain",
+    annotations={
+        "title": "Explain EML Tree Evaluation",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def eml_explain(
+    expression: str,
+    x: float | None = None,
+    y: float | None = None,
+    z: float | None = None,
+):
+    """Produce a step-by-step trace of how an EML formula is evaluated.
+
+    Args:
+        expression: EML formula or known name (e.g. 'sin', 'exp(x)').
+        x: Optional value for variable 'x'.
+        y: Optional value for variable 'y'.
+        z: Optional value for variable 'z'.
+
+    Returns:
+        dict with hierarchical trace and final result.
+    """
+    db = get_db()
+    compiler = EMLCompiler(db)
+
+    try:
+        # Resolve expression to a tree
+        # 1. Try known formula name
+        row = db.get_formula(expression)
+        if row:
+            tree = EMLNode.from_dict(json.loads(row["tree_json"]))
+        else:
+            # 2. Try compiling expression (expands database CALLs if db provided)
+            tree = compiler.compile(expression)
+
+        variables = {}
+        if x is not None:
+            variables["x"] = complex(x)
+        if y is not None:
+            variables["y"] = complex(y)
+        if z is not None:
+            variables["z"] = complex(z)
+
+        # Build trace
+        trace = tree.explain(variables)
+
+        # Final evaluation for confirmation
+        res = tree.evaluate(variables)
+
+        return {
+            "status": "success",
+            "expression": tree.to_expression(),
+            "result": extract_real(res),
+            "trace": "\n".join(trace),
+        }
+    except (ValueError, SyntaxError, RuntimeError, ArithmeticError) as e:
+        logger.error("Explain failed for %r: %s", expression, e)
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(
     name="eml_discover",
     annotations={
         "title": "Discover EML Formula",

@@ -2,115 +2,57 @@
 
 ## What This Is
 
-An MCP (Model Context Protocol) server that gives AI assistants access to the EML (Exp-Minus-Log) operator — the single binary operator that generates all elementary functions from the constant 1. The continuous analogue of the NAND gate. Based on Odrzywołek (2026). Currently functional on GitHub as a stdio MCP server, used by Claude, Gemini, and other MCP-compatible agents.
+An MCP (Model Context Protocol) server that provides AI assistants with access to the EML (Exp-Minus-Log) operator — the core generative primitive of elementary mathematics. Since v3.0, it includes an **EML-Transformer** prototype that compiles symbolic EML trees into analytical feed-forward networks (FFNs) using PyTorch, enabling memory-efficient and numerically transparent model architecture.
 
 ## Core Value
 
-The EML operator and its formula registry must produce numerically correct results at machine-epsilon precision for every known elementary function — correctness is non-negotiable because everything downstream (symbolic regression, MOP policy discovery, eventual transformer compilation) depends on it.
+The EML system provides a **numerically stable, minimal functional basis** for symbolic regression and transformer architectures. By using a single binary operator (EML) and high-precision complex arithmetic, it ensures that derived functions preserve transcendental properties at machine-epsilon precision, which is critical for scientific and engineering applications where "black-box" MLPs fail to maintain analytical constraints.
 
 ## Requirements
 
 ### Validated
 
-<!-- Shipped and confirmed valuable. -->
-
-- ✓ EML operator evaluation (`eml(x, y) = exp(x) - ln(y)`) — existing
-- ✓ Binary tree engine (`EMLNode`) with depth-first evaluation — existing
-- ✓ Formula registry with 8 named formulas (exp, ln, e, zero, negate, subtract, add, multiply) — existing
-- ✓ Numerical verification against transcendental test points per Schanuel conjecture — existing
-- ✓ Master formula tree generation for symbolic regression — existing
-- ✓ MCP server with 6 tools and 2 resources via FastMCP — existing
-- ✓ Complex128 arithmetic throughout for correctness — existing
-- ✓ **Package restructure** — Moved flat files into `src/eml_mcp/` package with submodules (v1.0)
-- ✓ **SQLite persistence layer** — Formula registry, cached trees, verification history, derivation provenance; replaces hardcoded `KNOWN_FORMULAS` dict (v1.0)
-- ✓ **Expression AST** — Parse mathematical expressions into intermediate AST (v1.0)
-- ✓ **EML compiler** — Compile ASTs down to EML trees by composing known formulas (v1.0)
-- ✓ **Formula discovery engine** — Composition + numerical verification with MSE proximity fallback (v1.0)
-- ✓ **MCP tools for DB access** — Search, derive, and history tools for agent consumption (v1.0)
-- ✓ **Test suite** — 46 pytest cases covering compiler, DB, and tools (v1.0)
-- ✓ **CI pipeline** — GitHub Actions for lint (trunk) + test (v1.0)
+- ✓ **Foundation (v1.0)**: Modularized package, SQL persistence, AST-based compiler, initial discovery engine.
+- ✓ **Symbolic Regression (v2.0)**: Master Formula Tree (Adam) optimization and "Weight Snapping" (Phases 5-6).
+- ✓ **Extended Registry (v2.0)**: Deep bootstrapping of ~36 elementary functions including trigonometric and special functions (Phase 7).
+- ✓ **Analytical Weight Compilation (v2.0)**: `EMLCompiledFFN` prototype mapping symbolic trees to PyTorch weights (Phase 8).
+- ✓ **Structural Reasoning (v2.0)**: Zhang-Shasha Tree Edit Distance for structural complexity ranking and simplification rules.
+- ✓ **Symbolic Attention (v2.0)**: Selective functional basis weighting and recursive token embedding (Phase 9).
+- ✓ **Performance & Stabilization (v3.0)**: `torch.compile` optimization (4x speedup), complex-valued arithmetic robustness, and `eml_explain` diagnostic tracing (Phase 10).
 
 ### Active
 
-<!-- Current scope. Building toward these. -->
-
-- [ ] **Symbolic Regression Pipeline** — Implement Adam-based optimization for master formula trees
-- [ ] **Parallel Discovery** — Multi-process discovery for higher throughput and depth
-- [ ] **Structural Similarity** — Rank formulas by tree edit distance (Zhang-Shasha)
-- [ ] **Deep Bootstrapping** — Derive all ~36 elementary functions from paper
-
+- [ ] **Dynamic Topology Shrinkage**: Pruning EML-Transformer heads based on symbolic identity redundancy during training.
+- [ ] **Multi-Variable EML (mEML)**: Extending the compiler and discovery engine to handle multi-variate Sheffer operators.
+- [ ] **Integration with MOP**: Using EML-derived policies for cognitive science applications.
 
 ### Out of Scope
 
-<!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
-
-- **EML-Transformer compilation** (EML tree → transformer weights) — separate project when the engine proves itself; architecture spec lives in `docs/` as reference
-- **MOP policy discovery from simulation data** — depends on EML SR working first; future project
-- **OpenPraparat / OEE integration** — requires MOP working first; research-stage
-- **GUI / web interface** — MCP is the interface; AI agents are the users
-- **Renaming the project** — it's on GitHub as `eml-mcp`, functional, and the MCP server is the primary interface until model compilation is proven
+- **Real-time Training GUIs**: The focus is on the engine; training visualization is left to TensorBoard or standard tools.
+- **Support for non-transcendental backends**: EML is fundamentally built on `exp` and `log`; linear-only backends are not supported.
 
 ## Context
 
 ### Theoretical Foundation
 
-EML is the computational substrate layer (L-1 in the extended EFHF framework). The Minimal Generative Architecture (MGA) pattern — minimal primitives + recursion + boundary constraints = unbounded complexity — appears across NAND (Boolean), EML (continuous math), MOP (cognition), and OpenPraparat (evolution). This server implements the EML instance.
+EML (Exp-Minus-Log) is the continuous gate-depth equivalent of the NAND gate. It exists at the substrate layer of the Minimal Generative Architecture (MGA). By discovering functional identities rather than hardcoding them, we achieve architectures that are structurally minimal (K-complexity prioritized). Our discovery of a K=11 subtraction tree (beating the paper's K=83) validates this exploratory approach.
 
-The paper's bootstrapping chain prescribes a specific derivation order (~36 primitives). Our approach differs: we let the system *discover* derivations by exploratory composition rather than following the paper's fixed recipe. This is philosophically aligned with MOP's insight that entropy-maximizing exploration outperforms prescribed objectives. Our subtraction tree (K=11) already beats the paper's compiler path (K=83), validating this approach.
+### Current State (v3.0)
 
-### Current State
-
-- Modularized Python package under `src/eml_mcp/`
-- SQLite persistence layer storing formula definitions, provenance, and verification logs
-- Goal-directed discovery engine with MSE-based similarity search and proximal fallback
-- 46 automated tests passing in CI; strictly formatted with Ruff and Black
-- 9 MCP tools exposing registry, compiler, and discovery engine
-
-
-### Codebase Map
-
-Full analysis in `.planning/codebase/` (7 documents, 816 lines):
-- `ARCHITECTURE.md` — Two-layer adapter pattern (core + MCP server)
-- `STACK.md` — Python 3.12, FastMCP, NumPy complex128
-- `CONCERNS.md` — 14 issues catalogued, prioritized
-
-## Constraints
-
-- **Language**: Python 3.12+ — established, dependencies locked
-- **Precision**: Complex128 (float64 real + float64 imag) — required by paper for trigonometric functions via Euler's formula
-- **MCP compatibility**: Must remain a valid MCP stdio server — existing users depend on it
-- **No training-time dependencies in core**: PyTorch stays in the `sr` optional group — core engine runs without GPU
-- **DB**: SQLite — zero external dependencies, single-file, embeddable; no Postgres/Redis
+- **Registry**: ~36 verified formulas with full provenance and verification history in SQLite.
+- **Transformer**: `EMLCompiledFFN` module optimized with `torch.compile` (mode="reduce-overhead").
+- **Precision**: Strict `complex128` (float64 real/imag) for transcendental stability.
+- **Diagnostic**: `eml_explain` provides full hierarchical evaluation traces for any EML tree.
 
 ## Key Decisions
 
-<!-- Decisions that constrain future work. Add throughout project lifecycle. -->
-
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Exploratory derivation over fixed bootstrapping chain | MOP suggests entropy-maximizing exploration beats prescribed objectives; our K=11 subtraction tree already beats paper's K=83 | Implemented (v1.0) |
-| SQLite for persistence | Zero dependency, embeddable, sufficient for formula counts in the hundreds; agents don't need concurrent write throughput | Implemented (v1.0) |
-| Formulas live in DB, not code | Hardcoded dict doesn't scale, can't track provenance or derivation history, prevents discovery | Implemented (v1.0) |
-| Package as `src/eml_mcp/` | Standard Python packaging; allows proper imports, test discovery, and eventual PyPI distribution | Implemented (v1.0) |
-| MCP tools designed for AI consumption | Primary users are AI agents, not humans; optimize for structured data, not readability | Implemented (v1.0) |
-| EML-Transformer is a separate project | Prove the engine works first; model compilation is a different problem with different dependencies (PyTorch, GPU) | Validated |
-
-## Evolution
-
-This document evolves at phase transitions and milestone boundaries.
-
-**After each phase transition** (via `/gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
-
-**After each milestone** (via `/gsd-complete-milestone`):
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
+| Exploratory derivation over fixed chain | Discovery beats prescription (K=11 vs K=83). | Core Engine Strategy |
+| `torch.compile` for tape execution | Sequential stage execution is slow; JIT fusion achieves 4x performance boost. | Implemented (v3.0) |
+| Complex128 as default dtype | Truncation errors in float32 break transcendental identities like Euler's. | Non-negotiable |
+| SQLite for metadata persistence | Low overhead, portable, perfect for formula counts in the hundreds. | Implemented (v1.0) |
+| Weight Snapping in SR | Converts continuous optimization landscapes into discrete symbolic structures. | Implemented (v2.0) |
 
 ---
-*Last updated: 2026-04-15 after initialization*
+*Last updated: 2026-04-16 | Milestone 3 (Production Readiness) Completed*

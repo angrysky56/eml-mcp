@@ -18,13 +18,14 @@ class NodeType(StrEnum):
     CONST = "const"  # Terminal: constant 1
     VAR = "var"  # Terminal: input variable
     EML = "eml"  # Internal: eml(left, right)
+    CALL = "call"  # Symbolic call to a registered function
 
 
 @dataclass
 class EMLNode:
     """A node in an EML expression tree.
 
-    The grammar is: S → 1 | x | eml(S, S)
+    The grammar is: S → 1 | x | eml(S, S) | func(S, ...)
 
     Every elementary function expression is a binary tree of
     identical EML nodes — like a circuit of NAND gates.
@@ -35,6 +36,8 @@ class EMLNode:
     var_name: str | None = None  # For VAR nodes
     left: EMLNode | None = None  # Left child (exp input)
     right: EMLNode | None = None  # Right child (ln input)
+    func_name: str | None = None  # For CALL nodes
+    args: dict[str, EMLNode] | None = None  # Arguments for CALL nodes
 
     def evaluate(self, variables: dict[str, complex] | None = None) -> complex:
         """Evaluate this EML tree with given variable bindings."""
@@ -48,31 +51,80 @@ class EMLNode:
             left_val = self.left.evaluate(variables)
             right_val = self.right.evaluate(variables)
             # eml(x, y) = exp(x) - ln(y)
-            # Using _safe_exp and _safe_log directly here to avoid circular imports
-            # if we were to import 'eml' from operator.py
             return _safe_exp(left_val) - _safe_log(right_val)
+        elif self.node_type == NodeType.CALL:
+            raise ValueError(f"Cannot evaluate unexpanded CALL node: {self.func_name}")
         raise ValueError(f"Unknown node type: {self.node_type}")
+
+    def explain(self, variables: dict[str, complex] | None = None, depth: int = 0) -> list[str]:
+        """Produce a hierarchical trace of how this node is evaluated."""
+        indent = "  " * depth
+        if self.node_type == NodeType.CONST:
+            v_str = f"{self.value.real}" if self.value.imag == 0 else f"{self.value}"
+            return [f"{indent}CONST: {v_str}"]
+            
+        if self.node_type == NodeType.VAR:
+            val = variables.get(self.var_name, "N/A") if variables else "N/A"
+            return [f"{indent}VAR '{self.var_name}': {val}"]
+            
+        if self.node_type == NodeType.CALL:
+            trace = [f"{indent}CALL '{self.func_name}':"]
+            for k, v in self.args.items():
+                trace.append(f"{indent}  ARG '{k}':")
+                trace.extend(v.explain(variables, depth + 2))
+            return trace
+
+        if self.node_type == NodeType.EML:
+            try:
+                l_val = self.left.evaluate(variables)
+                r_val = self.right.evaluate(variables)
+                e_l = _safe_exp(l_val)
+                l_r = _safe_log(r_val)
+                res = e_l - l_r
+                
+                v_str = lambda z: f"{z.real:.4f}" if z.imag == 0 else f"{z.real:.4f}+{z.imag:.4f}j"
+                
+                trace = [f"{indent}EML -> {v_str(res)}"]
+                trace.append(f"{indent}  Left: exp({v_str(l_val)}) = {v_str(e_l)}")
+                trace.extend(self.left.explain(variables, depth + 2))
+                trace.append(f"{indent}  Right: ln({v_str(r_val)}) = {v_str(l_r)}")
+                trace.extend(self.right.explain(variables, depth + 2))
+                return trace
+            except Exception as e:
+                return [f"{indent}EML (ERROR: {e})", 
+                        f"{indent}  L: {self.left.to_expression()}", 
+                        f"{indent}  R: {self.right.to_expression()}"]
+            
+        return [f"{indent}UNKNOWN"]
 
     @property
     def depth(self) -> int:
         """Depth of this subtree."""
         if self.node_type in (NodeType.CONST, NodeType.VAR):
             return 0
-        return 1 + max(self.left.depth, self.right.depth)
+        if self.node_type == NodeType.EML:
+            return 1 + max(self.left.depth, self.right.depth)
+        # For CALL, depth is 1 + max of args or 0 if no args?
+        # Actually, if we haven't expanded, it's opaque.
+        return 1 + max((arg.depth for arg in self.args.values()), default=0)
 
     @property
     def leaf_count(self) -> int:
         """Number of terminal nodes (constants and variables)."""
         if self.node_type in (NodeType.CONST, NodeType.VAR):
             return 1
-        return self.left.leaf_count + self.right.leaf_count
+        if self.node_type == NodeType.EML:
+            return self.left.leaf_count + self.right.leaf_count
+        return sum(arg.leaf_count for arg in self.args.values())
 
     @property
     def node_count(self) -> int:
-        """Total nodes in the tree (paper's Kolmogorov complexity K = 2L-1)."""
+        """Total nodes in the tree."""
         if self.node_type in (NodeType.CONST, NodeType.VAR):
             return 1
-        return 1 + self.left.node_count + self.right.node_count
+        if self.node_type == NodeType.EML:
+            return 1 + self.left.node_count + self.right.node_count
+        return 1 + sum(arg.node_count for arg in self.args.values())
 
     def copy(self) -> EMLNode:
         """Create a recursive deep copy of this tree."""
@@ -82,6 +134,12 @@ class EMLNode:
             return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
         elif self.node_type == NodeType.EML:
             return EMLNode(node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy())
+        elif self.node_type == NodeType.CALL:
+            return EMLNode(
+                node_type=NodeType.CALL,
+                func_name=self.func_name,
+                args={k: v.copy() for k, v in self.args.items()} if self.args else None
+            )
         raise ValueError(f"Unknown node type: {self.node_type}")
 
     def substitute(self, var_mappings: dict[str, EMLNode]) -> EMLNode:
@@ -98,6 +156,12 @@ class EMLNode:
                 node_type=NodeType.EML,
                 left=self.left.substitute(var_mappings),
                 right=self.right.substitute(var_mappings),
+            )
+        elif self.node_type == NodeType.CALL:
+            return EMLNode(
+                node_type=NodeType.CALL,
+                func_name=self.func_name,
+                args={k: v.substitute(var_mappings) for k, v in self.args.items()} if self.args else None
             )
         raise ValueError(f"Unknown node type: {self.node_type}")
 
@@ -120,6 +184,9 @@ class EMLNode:
             return str(v)
         elif self.node_type == NodeType.VAR:
             return self.var_name
+        elif self.node_type == NodeType.CALL:
+            arg_str = ", ".join(f"{k}={v.to_expression()}" for k, v in self.args.items())
+            return f"{self.func_name}({arg_str})"
         else:
             return f"eml({self.left.to_expression()}, {self.right.to_expression()})"
 
@@ -136,6 +203,12 @@ class EMLNode:
             }
         elif self.node_type == NodeType.VAR:
             return {"type": "var", "name": self.var_name}
+        elif self.node_type == NodeType.CALL:
+            return {
+                "type": "call",
+                "name": self.func_name,
+                "args": {k: v.to_dict() for k, v in self.args.items()} if self.args else {}
+            }
         else:
             return {
                 "type": "eml",
@@ -174,7 +247,11 @@ class EMLNode:
             return abs(self.value - other.value) < 1e-15
         if self.node_type == NodeType.VAR:
             return self.var_name == other.var_name
-        return self.left == other.left and self.right == other.right
+        if self.node_type == NodeType.EML:
+            return self.left == other.left and self.right == other.right
+        if self.node_type == NodeType.CALL:
+            return self.func_name == other.func_name and self.args == other.args
+        return False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EMLNode:
@@ -189,6 +266,9 @@ class EMLNode:
             return cls(node_type=NodeType.CONST, value=value)
         elif node_type_str == "var":
             return cls(node_type=NodeType.VAR, var_name=data["name"])
+        elif node_type_str == "call":
+            args = {k: cls.from_dict(v) for k, v in data["args"].items()} if "args" in data else None
+            return cls(node_type=NodeType.CALL, func_name=data["name"], args=args)
         elif node_type_str == "eml":
             left = cls.from_dict(data["left"])
             right = cls.from_dict(data["right"])

@@ -12,11 +12,13 @@ supports hybrid learnable weights.
 from __future__ import annotations
 
 from typing import Any
+import json
 import torch
 import torch.nn as nn
 from torch import Tensor
 from eml_mcp.trees import EMLNode, NodeType
 from eml_mcp.simplifier import simplify_tree
+from eml_mcp.database import EMLFormulaDB
 
 
 class EMLCompiledFFN(nn.Module):
@@ -33,7 +35,9 @@ class EMLCompiledFFN(nn.Module):
         variable_names: list[str], 
         eps: float = 1e-12,
         complex_mode: bool = False,
-        learnable: bool = False
+        learnable: bool = False,
+        db: EMLFormulaDB | None = None,
+        compile_model: bool = True
     ):
         """Initialize the compiled FFN.
         
@@ -43,12 +47,17 @@ class EMLCompiledFFN(nn.Module):
             eps: Stability epsilon for log.
             complex_mode: If True, uses complex128 tensors and safe complex logs.
             learnable: If True, weights can be fine-tuned via delta parameters.
+            db: Optional database to resolve CALL nodes.
+            compile_model: Whether to use torch.compile() for optimization.
         """
         super().__init__()
         self.variable_names = variable_names
         self.eps = eps
         self.complex_mode = complex_mode
         self.learnable = learnable
+        self.db = db
+        self.compile_model = compile_model
+        # Use complex128 for complex mode to maintain exact precision
         self.dtype = torch.complex128 if complex_mode else torch.float64
         
         if isinstance(trees, EMLNode):
@@ -58,15 +67,16 @@ class EMLCompiledFFN(nn.Module):
             self.single_head_mode = False
         self.tree_list = trees
         
-        # 1. Linearize trees into unique sub-expressions (DAG conversion)
+        # 1. Expand CALL nodes and linearize trees into unique sub-expressions (DAG conversion)
         self.unique_nodes = {} # expr -> {index, depth, node}
         self.leaves = []       # list of (index, type, value/name)
         self.internal_nodes = [] # list of (index, depth, left_idx, right_idx)
         
-        # Apply symbolic simplification before linearization to unify redudant forms
-        trees = [simplify_tree(t) for t in trees]
+        # Expand and simplify
+        expanded_trees = [self._expand_calls(t) for t in self.tree_list]
+        simplified_trees = [simplify_tree(t) for t in expanded_trees]
         
-        self.root_indices_list = [self._linearize(t) for t in trees]
+        self.root_indices_list = [self._linearize(t) for t in simplified_trees]
         self.register_buffer("root_indices", torch.tensor(self.root_indices_list, dtype=torch.long))
         
         self.num_nodes = len(self.unique_nodes)
@@ -129,6 +139,38 @@ class EMLCompiledFFN(nn.Module):
                 
         return idx
 
+    def _expand_calls(self, node: EMLNode) -> EMLNode:
+        """Recursively expand CALL nodes by stitching in trees from the database."""
+        if node.node_type != NodeType.CALL:
+            if node.node_type == NodeType.EML:
+                return EMLNode(
+                    node_type=NodeType.EML,
+                    left=self._expand_calls(node.left),
+                    right=self._expand_calls(node.right)
+                )
+            return node.copy()
+        
+        # Resolve CALL
+        if not self.db:
+            raise ValueError(f"Cannot expand CALL node '{node.func_name}' because no DB was provided.")
+            
+        formula_data = self.db.get_formula(node.func_name)
+        if not formula_data:
+            raise ValueError(f"Formula '{node.func_name}' not found in database.")
+            
+        # 1. Restore the template tree from JSON
+        template_tree = EMLNode.from_dict(json.loads(formula_data["tree_json"]))
+        
+        # 2. Recursively expand the arguments provided to this CALL
+        expanded_args = {k: self._expand_calls(v) for k, v in node.args.items()}
+        
+        # 3. Substitute expanded arguments into the template
+        expanded_sub_tree = template_tree.substitute(expanded_args)
+        
+        # 4. Recursively expand any CALL nodes that might exist in the substituted template
+        # (Allows templates themselves to contain CALL nodes)
+        return self._expand_calls(expanded_sub_tree)
+
     def _setup_constants(self):
         """Setup constants buffer and variable mapping."""
         # Map variables to their indices in the input tensor
@@ -159,8 +201,23 @@ class EMLCompiledFFN(nn.Module):
         self.register_buffer("var_indices", torch.tensor(var_indices, dtype=torch.long))
         self.register_buffer("var_input_indices", torch.tensor(var_input_indices, dtype=torch.long))
 
+        # Initial forward pass to warm up or compile
+        if hasattr(torch, "compile") and getattr(self, "compile_model", False):
+            try:
+                # We compile the main forward logic
+                # 'reduce-overhead' is good for small models like ours
+                self._compiled_run = torch.compile(self._run_forward, mode="reduce-overhead")
+            except Exception:
+                self._compiled_run = self._run_forward
+        else:
+            self._compiled_run = self._run_forward
+
     def forward(self, x: Tensor) -> Tensor:
-        """Forward pass.
+        """Forward pass dispatch."""
+        return self._compiled_run(x)
+
+    def _run_forward(self, x: Tensor) -> Tensor:
+        """Actual forward pass logic.
         
         Args:
             x: Input tensor of shape (..., len(variable_names)).
@@ -269,20 +326,44 @@ class EMLStage(nn.Module):
             R = tape[..., self.right_indices]
             
         # 2. Compute EML operation
-        if self.complex_mode:
-            exp_l = torch.exp(L)
-            r_mag = R.abs().clamp(min=self.eps)
-            ln_r = torch.complex(torch.log(r_mag), torch.atan2(R.imag, R.real))
-            V = exp_l - ln_r
+        # Apply numerical guardrails to prevent INF/NAN
+        # For float32, exp(88) is ~1e38 (overflow)
+        # For float64, exp(709) is ~1e308
+        if tape.dtype == torch.float32:
+            max_exp = 88.0
         else:
-            exp_l = torch.exp(L)
-            ln_r = torch.log(torch.relu(R) + self.eps)
-            V = exp_l - ln_r
+            max_exp = 709.0
+
+        L_safe = torch.clamp(L.real, max=max_exp)
+        if L.is_complex():
+            L_safe = torch.complex(L_safe, L.imag)
+            
+        # native exp
+        exp_l = torch.exp(L_safe)
+        
+        if self.complex_mode:
+            # Principal branch of log(z) = log(|z|) + i*arg(z)
+            # torch.log already handles this correctly for complex128.
+            # We just need to ensure R != 0.
+            R_safe = R
+            # Tiny epsilon shift for stability at singularity
+            mask = (R == 0)
+            if mask.any():
+                R_safe = torch.where(mask, torch.full_like(R, self.eps), R)
+            ln_r = torch.log(R_safe)
+        else:
+            # Real mode: log(|R| + eps)
+            ln_r = torch.log(torch.abs(R) + self.eps)
+        
+        V = exp_l - ln_r
             
         # 3. Update tape
-        # We need a new tape to stay differentiable and not do in-place modification
-        # if using autograd (though tape update is usually fine in some contexts).
-        # We use scatter_ to update the slots for this stage.
+        # To maintain differentiability, we must use clone() if grad is enabled.
+        # However, if not training, we can update in-place for performance.
+        if not torch.is_grad_enabled():
+            tape[..., self.out_indices] = V
+            return tape
+            
         new_tape = tape.clone()
         new_tape[..., self.out_indices] = V
         return new_tape
