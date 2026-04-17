@@ -1,10 +1,10 @@
 # EML Formula Catalog
 
-_Auto-generated from `eml_formulas.db` at 2026-04-16T20:55:12+00:00. Do not edit by hand — regenerate with `uv run python scripts/export_catalog.py`._
+_Auto-generated from `eml_formulas.db` at 2026-04-17T00:45:13+00:00. Do not edit by hand — regenerate with `uv run python scripts/export_catalog.py`._
 
 **Grammar:** `S → 1 | eml(S, S)`  ·  **Reference:** Odrzywołek (2026), [arXiv:2603.21852v2](https://arxiv.org/html/2603.21852v2)
 
-**Totals:** 21 formulas (18 seeded / 3 discovered)
+**Totals:** 27 formulas (18 seeded / 9 discovered)
 
 ## Seeded primitives
 
@@ -142,5 +142,11 @@ Formulas below were produced by the evolutionary Discovery Engine (`eml_discover
 | Name | K | Depth | Expression | Note |
 |------|--:|------:|------------|------|
 | `discovered_d432aaea` | 3 | 1 | `eml(x, 2.718281828459045)` | Simplified from K=13 to K=3 by migrate_simplify_catalog. |
+| `discovered_2945c35b` | 9 | 4 | `eml(eml(1, eml(eml(1, x), 1)), 0.1353352832366127)` | Targeted search best MSE: 0.00e+00 |
 | `discovered_526ee564` | 9 | 4 | `eml(eml(-0.3665129205816644, eml(eml(-697.281718171541, x...` _(see RPN for full form)_ | Simplified from K=41 to K=9 by migrate_simplify_catalog. |
+| `discovered_7e5124d4` | 9 | 4 | `eml(eml(1, eml(eml(1, x), 1)), 2.718281828459045)` | Targeted search best MSE: 4.31e-32 |
+| `discovered_9d829624` | 9 | 4 | `eml(eml(1, eml(eml(1, x), 1)), 0.049787068367863944)` | Targeted search best MSE: 0.00e+00 |
+| `discovered_b92d2388` | 9 | 4 | `eml(eml(0.09404782761669894, eml(eml(-697.281718171541, x...` _(see RPN for full form)_ | Targeted search best MSE: 8.22e-31 |
+| `discovered_d2a221fe` | 9 | 4 | `eml(eml(0.834032445247956, eml(eml(-697.281718171541, x),...` _(see RPN for full form)_ | Targeted search best MSE: 2.16e-29 |
 | `discovered_b11d6e1f` | 21 | 8 | `eml(eml(eml(1, eml(eml(1, eml(1, eml(eml(1, x), 1))), 1))...` _(see RPN for full form)_ | Targeted search best MSE: 1.64e-31 |
+| `discovered_83f9cfb5` | 29 | 8 | `eml(eml(1, eml(eml(1, eml(eml(1, eml(eml(1, x), 1)), eml(...` _(see RPN for full form)_ | Targeted search best MSE: 5.34e-31 |
