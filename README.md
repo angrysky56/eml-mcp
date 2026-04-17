@@ -12,10 +12,11 @@ Paired with the constant `1`, this operator reconstructs arithmetic, all transce
 
 ## Status
 
-- **Current milestone:** v2.0 (Discovery Optimization), phase 7 of 8 — see `.planning/STATE.md`.
+- **Current milestone:** v3.0 (Analytical Compilation), Completed — see `.planning/STATE.md`.
 - **Live catalog:** [`docs/FORMULAS.md`](docs/FORMULAS.md) — auto-generated from the SQLite DB; regenerate with `uv run python scripts/export_catalog.py`.
-- **Persistence:** Every seed, compiled composition, verification result, and symbolic-regression output is written to `eml_formulas.db`. The server ships with 8 seeded primitives and accumulates more via discovery.
+- **Persistence:** Every seed, compiled composition, verification result, and symbolic-regression output is written to `eml_formulas.db`. The server ships with ~36 seeded/discovered primitives and accumulates more via discovery.
 - **Catalog simplification:** `scripts/migrate_simplify_catalog.py` compresses stored trees via the identity-rule simplifier. On the seeded catalog it reduces total K by ~73% (1451 → 393). New discoveries are simplified before storage automatically. See [`docs/simplifier_k_reduction.md`](docs/simplifier_k_reduction.md).
+- **Analytical Compilation:** `EMLCompiledFFN` mapping symbolic trees to high-performance PyTorch models with `torch.compile` support (4x speedup).
 - **Non-blocking discovery:** long searches can be launched as background jobs (`eml_discover_start` → `eml_discover_status` → `eml_discover_result`, with `eml_discover_cancel` for cooperative stop). See [`docs/async_discovery.md`](docs/async_discovery.md).
 
 ## Quick Start
@@ -106,6 +107,7 @@ All tools share the same database singleton, so discoveries made by one invocati
 | Tool                      | Description                                                                                 |
 | ------------------------- | ------------------------------------------------------------------------------------------- |
 | `eml_evaluate`            | Evaluate `eml(x, y) = exp(x) − ln(y)` on given inputs                                       |
+| `eml_explain`             | Provide a step-by-step evaluation trace (identity reduction log) for a formula              |
 | `eml_list_formulas`       | List the live formula catalog from SQLite (seeds + discoveries)                             |
 | `eml_tree_info`           | Inspect a formula's full tree structure, RPN code, and optionally evaluate                  |
 | `eml_compile`             | Compile a Python math expression into an EML tree via registered primitives                 |
@@ -215,6 +217,8 @@ src/eml_mcp/
   ├── similarity.py      — Zhang-Shasha tree edit distance
   ├── discovery.py       — Evolutionary / novelty search engine
   ├── regression.py      — PyTorch master-tree training (optional, requires `[sr]` extra)
+  ├── transformer.py     — AOT/JIT compilation of symbolic trees to analytical FFNNs
+  ├── attention.py       — Symbolic attention routing over functional heads
   └── server.py          — FastMCP tool and resource definitions
 scripts/
   └── export_catalog.py  — Regenerate docs/FORMULAS.md from the live DB
