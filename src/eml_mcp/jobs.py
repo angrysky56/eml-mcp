@@ -30,7 +30,7 @@ import time
 from typing import Any
 
 from eml_mcp.database import EMLFormulaDB
-from eml_mcp.discovery import DiscoveryEngine, DiscoveryCancelled
+from eml_mcp.discovery import DiscoveryCancelled, DiscoveryEngine
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +58,14 @@ class JobStore:
     def _sweep_orphans(self) -> None:
         """Mark pre-existing `running` rows as failed on startup."""
         with self.db.conn:
-            cur = self.db.conn.execute(
-                """
+            cur = self.db.conn.execute("""
                 UPDATE discovery_jobs
                    SET status = 'failed',
                        error = 'orphaned by server restart',
                        completed_at = datetime('now'),
                        updated_at = datetime('now')
                  WHERE status = 'running'
-                """
-            )
+                """)
             if cur.rowcount > 0:
                 logger.info(
                     "Swept %d orphaned running job(s) on startup",
@@ -106,7 +104,9 @@ class JobStore:
         return job_id
 
     def get(self, job_id: str) -> dict[str, Any] | None:
-        cur = self.db.conn.execute("SELECT * FROM discovery_jobs WHERE job_id = ?", (job_id,))
+        cur = self.db.conn.execute(
+            "SELECT * FROM discovery_jobs WHERE job_id = ?", (job_id,)
+        )
         row = cur.fetchone()
         return dict(row) if row else None
 

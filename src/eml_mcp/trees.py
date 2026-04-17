@@ -4,6 +4,7 @@ EML binary tree structures — EMLNode, NodeType, and factory functions.
 
 from __future__ import annotations
 
+import cmath
 import math
 from dataclasses import dataclass
 from enum import StrEnum
@@ -38,6 +39,7 @@ class EMLNode:
     right: EMLNode | None = None  # Right child (ln input)
     func_name: str | None = None  # For CALL nodes
     args: dict[str, EMLNode] | None = None  # Arguments for CALL nodes
+    tape_idx: int | None = None  # Optional index in a matrix/tape representation
 
     def evaluate(self, variables: dict[str, complex] | None = None) -> complex:
         """Evaluate this EML tree with given variable bindings."""
@@ -56,7 +58,9 @@ class EMLNode:
             raise ValueError(f"Cannot evaluate unexpanded CALL node: {self.func_name}")
         raise ValueError(f"Unknown node type: {self.node_type}")
 
-    def explain(self, variables: dict[str, complex] | None = None, depth: int = 0) -> list[str]:
+    def explain(
+        self, variables: dict[str, complex] | None = None, depth: int = 0
+    ) -> list[str]:
         """Produce a hierarchical trace of how this node is evaluated."""
         indent = "  " * depth
         if self.node_type == NodeType.CONST:
@@ -82,15 +86,24 @@ class EMLNode:
                 l_r = _safe_log(r_val)
                 res = e_l - l_r
 
-                v_str = lambda z: f"{z.real:.4f}" if z.imag == 0 else f"{z.real:.4f}+{z.imag:.4f}j"
+                def format_complex(z: complex) -> str:
+                    return (
+                        f"{z.real:.4f}"
+                        if z.imag == 0
+                        else f"{z.real:.4f}+{z.imag:.4f}j"
+                    )
 
-                trace = [f"{indent}EML -> {v_str(res)}"]
-                trace.append(f"{indent}  Left: exp({v_str(l_val)}) = {v_str(e_l)}")
+                trace = [f"{indent}EML -> {format_complex(res)}"]
+                trace.append(
+                    f"{indent}  Left: exp({format_complex(l_val)}) = {format_complex(e_l)}"
+                )
                 trace.extend(self.left.explain(variables, depth + 2))
-                trace.append(f"{indent}  Right: ln({v_str(r_val)}) = {v_str(l_r)}")
+                trace.append(
+                    f"{indent}  Right: ln({format_complex(r_val)}) = {format_complex(l_r)}"
+                )
                 trace.extend(self.right.explain(variables, depth + 2))
                 return trace
-            except Exception as e:
+            except (ArithmeticError, ValueError, TypeError) as e:
                 return [
                     f"{indent}EML (ERROR: {e})",
                     f"{indent}  L: {self.left.to_expression()}",
@@ -135,7 +148,9 @@ class EMLNode:
         elif self.node_type == NodeType.VAR:
             return EMLNode(node_type=NodeType.VAR, var_name=self.var_name)
         elif self.node_type == NodeType.EML:
-            return EMLNode(node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy())
+            return EMLNode(
+                node_type=NodeType.EML, left=self.left.copy(), right=self.right.copy()
+            )
         elif self.node_type == NodeType.CALL:
             return EMLNode(
                 node_type=NodeType.CALL,
@@ -163,9 +178,11 @@ class EMLNode:
             return EMLNode(
                 node_type=NodeType.CALL,
                 func_name=self.func_name,
-                args={k: v.substitute(var_mappings) for k, v in self.args.items()}
-                if self.args
-                else None,
+                args=(
+                    {k: v.substitute(var_mappings) for k, v in self.args.items()}
+                    if self.args
+                    else None
+                ),
             )
         raise ValueError(f"Unknown node type: {self.node_type}")
 
@@ -189,7 +206,9 @@ class EMLNode:
         elif self.node_type == NodeType.VAR:
             return self.var_name
         elif self.node_type == NodeType.CALL:
-            arg_str = ", ".join(f"{k}={v.to_expression()}" for k, v in self.args.items())
+            arg_str = ", ".join(
+                f"{k}={v.to_expression()}" for k, v in self.args.items()
+            )
             return f"{self.func_name}({arg_str})"
         else:
             return f"eml({self.left.to_expression()}, {self.right.to_expression()})"
@@ -211,7 +230,9 @@ class EMLNode:
             return {
                 "type": "call",
                 "name": self.func_name,
-                "args": {k: v.to_dict() for k, v in self.args.items()} if self.args else {},
+                "args": (
+                    {k: v.to_dict() for k, v in self.args.items()} if self.args else {}
+                ),
             }
         else:
             return {
@@ -220,21 +241,45 @@ class EMLNode:
                 "right": self.right.to_dict(),
             }
 
+    def get_variables(self) -> set[str]:
+        """Return all unique variable names in the tree."""
+        vars_found = set()
+
+        def collect(node: EMLNode):
+            if node.node_type == NodeType.VAR:
+                vars_found.add(node.var_name)
+            elif node.node_type == NodeType.EML:
+                if node.left:
+                    collect(node.left)
+                if node.right:
+                    collect(node.right)
+
+        collect(self)
+        return vars_found
+
     def to_signature(self, test_points: list[complex]) -> list[complex] | None:
         """Compute the functional signature of this tree on test points.
 
         Returns None if evaluation fails or produces non-finite results.
+        Uses N-ary sampling if the tree contains multiple variables.
         """
+        vars_in_tree = sorted(list(self.get_variables()))
+        if not vars_in_tree:
+            # Handle constant trees
+            vars_in_tree = ["x"]
 
         outputs = []
-        for i, point in enumerate(test_points):
+        for p in test_points:
             try:
-                # Provide a varying 'y' using other test points to avoid collisions
-                y_point = test_points[(i + 1) % len(test_points)]
-                val = self.evaluate(
-                    {"x": point, "y": y_point, "z": test_points[(i + 2) % len(test_points)]}
-                )
-                if math.isnan(val.real) or math.isinf(val.real):
+                # Generate bindings match logic in DiscoveryEngine
+                bindings = {}
+                for j, v in enumerate(vars_in_tree):
+                    scale = 1.1 + (j * 0.13)
+                    offset = j * 0.071
+                    bindings[v] = p * scale + offset
+
+                val = self.evaluate(bindings)
+                if not cmath.isfinite(val.real) or not cmath.isfinite(val.imag):
                     return None
                 outputs.append(val)
             except (ValueError, ZeroDivisionError, OverflowError):
@@ -272,7 +317,9 @@ class EMLNode:
             return cls(node_type=NodeType.VAR, var_name=data["name"])
         elif node_type_str == "call":
             args = (
-                {k: cls.from_dict(v) for k, v in data["args"].items()} if "args" in data else None
+                {k: cls.from_dict(v) for k, v in data["args"].items()}
+                if "args" in data
+                else None
             )
             return cls(node_type=NodeType.CALL, func_name=data["name"], args=args)
         elif node_type_str == "eml":

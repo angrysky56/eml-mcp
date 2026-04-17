@@ -61,46 +61,48 @@ def test_validation_mse_persists():
     x = torch.randn(10, 1, dtype=torch.float64)
     # Target function
     target = torch.tanh(x).squeeze(-1)
-    
+
     # Intentionally messy redundant tree that evaluates to something
     c0 = EMLNode(NodeType.CONST, value=0.0)
     c1 = EMLNode(NodeType.CONST, value=1.0)
-    redundant = EMLNode(NodeType.EML, left=c0, right=c1) # Evaluates to 1.0
+    redundant = EMLNode(NodeType.EML, left=c0, right=c1)  # Evaluates to 1.0
     # Something tracking target roughly
     var_x = EMLNode(NodeType.VAR, var_name="x")
     tree = EMLNode(NodeType.EML, left=var_x, right=redundant)
-    
+
     model = EMLCompiledFFN(trees=tree, variable_names=["x"], learnable=True)
-    
+
     loss_before = torch.nn.functional.mse_loss(model(x), target)
     model.apply_symbolic_pruning()
     loss_after = torch.nn.functional.mse_loss(model(x), target)
-    
+
     assert torch.allclose(loss_before, loss_after)
+
 
 def test_compiled_graph_pruning():
     import time
+
     tree = EMLNode(NodeType.VAR, var_name="z")
     model = EMLCompiledFFN(trees=tree, variable_names=["z"], learnable=True, compile_model=True)
     x = torch.randn(10, 1, dtype=torch.float64)
     target = x.squeeze(-1)
-    
+
     # Warmup
     for _ in range(5):
         _ = model(x)
-        
+
     start = time.perf_counter()
     for _ in range(50):
         _ = model(x)
     pre_prune_time = time.perf_counter() - start
-    
+
     model.apply_symbolic_pruning()
-    
+
     start = time.perf_counter()
     for _ in range(50):
         _ = model(x)
     post_prune_time = time.perf_counter() - start
-    
+
     # The compilation model should at least maintain execution or potentially drop latency
     # Just asserting it still works smoothly under compilation mode.
     assert post_prune_time is not None

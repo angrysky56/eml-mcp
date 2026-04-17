@@ -54,7 +54,7 @@ from eml_mcp.trees import EMLNode, extract_real
 try:
     import torch  # noqa: F401
 
-    from eml_mcp.regression import mor_symbolic_regression_loop, train_eml_tree
+    from eml_mcp.regression import mor_symbolic_regression_loop
 
     HAS_TORCH = True
 except ImportError:
@@ -130,7 +130,9 @@ def eml_evaluate(x: float, y: float):
                 "exp_x": extract_real(
                     complex(math.e**x) if abs(x) < 700 else complex(float("inf"))
                 ),
-                "ln_y": extract_real(complex(math.log(y)) if y > 0 else {"requires_complex": True}),
+                "ln_y": extract_real(
+                    complex(math.log(y)) if y > 0 else {"requires_complex": True}
+                ),
             },
             "explanation": (
                 (
@@ -143,7 +145,9 @@ def eml_evaluate(x: float, y: float):
             ),
         }
     except (OverflowError, ValueError, ZeroDivisionError, ArithmeticError) as e:
-        logger.error("EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True)
+        logger.error(
+            "EML evaluate failed for inputs x=%s, y=%s: %s", x, y, e, exc_info=True
+        )
         return {"status": "error", "message": str(e)}
 
 
@@ -766,9 +770,13 @@ def eml_verify(
 
     # Define reference functions
     ref_functions = {
-        "exp": lambda z: complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf")),
+        "exp": lambda z: (
+            complex(math.e**z.real) if abs(z.real) < 700 else complex(float("inf"))
+        ),
         "e": lambda _: complex(math.e),
-        "ln": lambda z: complex(math.log(z.real)) if z.real > 0 else complex(float("nan")),
+        "ln": lambda z: (
+            complex(math.log(z.real)) if z.real > 0 else complex(float("nan"))
+        ),
         "zero": lambda _: complex(0.0),
         "subtract": lambda x, y: complex(x - y),
         "negate": lambda z: complex(-z),
@@ -963,12 +971,11 @@ def eml_symbolic_regression(
         # Evaluate target_expression
         y_targets = []
         for v in x_vals:
-            y_targets.append(complex(safe_eval_math(target_expression, complex(v))))
+            y_targets.append(complex(safe_eval_math(target_expression, x=complex(v))))
         y_tensor = torch.tensor(y_targets, dtype=torch.complex128)
 
         # Train
         discovered, mse = mor_symbolic_regression_loop(
-            target_expression=target_expression,
             target_data=target_data,
             target_values=y_tensor,
             max_steps=depth,
@@ -991,7 +998,9 @@ def eml_symbolic_regression(
         logger.error("Symbolic regression failed: %s", e, exc_info=True)
         return {"status": "error", "message": f"Training error: {e}"}
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("Unexpected system error during symbolic regression: %s", e, exc_info=True)
+        logger.error(
+            "Unexpected system error during symbolic regression: %s", e, exc_info=True
+        )
         return {"status": "error", "message": f"Internal system failure: {e}"}
 
 
@@ -1097,7 +1106,9 @@ def eml_similarity(formula_a: str, formula_b: str):
         "k_a": tree_a.node_count,
         "k_b": tree_b.node_count,
         "max_possible_distance": tree_a.node_count + tree_b.node_count,
-        "similarity_score": max(0.0, 1.0 - (distance / (tree_a.node_count + tree_b.node_count))),
+        "similarity_score": max(
+            0.0, 1.0 - (distance / (tree_a.node_count + tree_b.node_count))
+        ),
     }
 
 

@@ -18,14 +18,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-16)
 
 **Core value:** Numerically correct EML results at machine-epsilon precision
-**Current focus:** Phase 11 — Dynamic Topology Optimization
+**Current focus:** Milestone 4 Cleanup & Archival
 
 ## Current State
 
-- **Phase:** 11 of 12
-- **Status:** Executing Phase 11
-- **Milestone:** v4.0
-- **Next action:** Discuss Phase 11: Implement pruning mechanisms for the EML-Transformer based on symbolic identities.
+- **Phase:** 12 of 12
+- **Status:** Milestone 4 Complete
+- **Milestone:** v4.0 (Completed)
+- **Next action:** Define Milestone 5 or finalize documentation for release.
 
 ## Phase History
 

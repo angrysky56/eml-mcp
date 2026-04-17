@@ -195,7 +195,9 @@ def train_eml_tree(
         )
 
         if torch.isnan(loss) or torch.isinf(loss):
-            print(f"Stopping at epoch {epoch}: Invalid loss ({loss.item()}) encountered.")
+            print(
+                f"Stopping at epoch {epoch}: Invalid loss ({loss.item()}) encountered."
+            )
             break
 
         loss.backward()
@@ -252,7 +254,6 @@ def mcculloch_pitts_gate(nn_outputs: dict[str, float], threshold: float = 0.5) -
 
 
 def mor_symbolic_regression_loop(
-    target_expression: str,
     target_data: dict[str, Tensor],
     target_values: Tensor,
     max_steps: int = 5,

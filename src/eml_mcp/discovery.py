@@ -45,7 +45,33 @@ class DiscoveryCancelled(Exception):
         self.partial_result: dict[str, Any] | None = None
 
 
-def safe_eval_math(expression: str, x: complex, **kwargs: complex) -> complex:
+class VarDetector(ast.NodeVisitor):
+    """Detects all unique variables in an expression."""
+
+    def __init__(self):
+        self.variables = set()
+
+    def visit_Name(self, node: ast.Name):
+        # Exclude common constants and functions
+        if node.id not in (
+            "math",
+            "cmath",
+            "pi",
+            "e",
+            "tau",
+            "j",
+            "exp",
+            "log",
+            "ln",
+            "sin",
+            "cos",
+            "tan",
+        ):
+            self.variables.add(node.id)
+        self.generic_visit(node)
+
+
+def safe_eval_math(expression: str, **variables: complex) -> complex:
     """Safely evaluate a mathematical expression using AST walking.
 
     Acts as a 'Feature Filter' to ensure the target expression is within
@@ -90,12 +116,11 @@ def safe_eval_math(expression: str, x: complex, **kwargs: complex) -> complex:
 
     # Allowed variables and constants
     constants = {
-        "x": x,
         "pi": math.pi,
         "e": math.e,
         "tau": getattr(math, "tau", 6.283185307179586),
         "j": 1j,
-        **kwargs,
+        **variables,
     }
 
     def _eval(node):
@@ -122,7 +147,9 @@ def safe_eval_math(expression: str, x: complex, **kwargs: complex) -> complex:
                 return constants[node.id]
             if node.id in ("math", "cmath"):
                 return node.id
-            raise ValueError(f"Reference '{node.id}' is not a recognized constant or variable.")
+            raise ValueError(
+                f"Reference '{node.id}' is not a recognized constant or variable."
+            )
         elif isinstance(node, ast.Constant):
             return complex(node.value)
         elif isinstance(node, ast.Attribute):
@@ -171,29 +198,52 @@ class DiscoveryEngine:
         self._formula_cache: list[tuple[str, list[complex]]] = []
         self._cache_synced = False
         self.target_expression: str | None = None
-        self._evaluate_target_fn: Callable[[complex], complex] | None = None
+        self._evaluate_target_fn: Callable[..., complex] | None = None
+        self.target_vars: list[str] = ["x"]
 
-    def _evaluate_target(self, x: complex) -> complex:
-        """Evaluate target behavior at a point."""
+    def _evaluate_target(self, variables: dict[str, complex]) -> complex:
+        """Evaluate target behavior for a set of variable bindings."""
+        if self._evaluate_target_fn is None:
+            return complex(float("nan"))
         try:
-            return self._evaluate_target_fn(x)
+            return self._evaluate_target_fn(**variables)
         except Exception:
             return complex(float("nan"))
 
+    def _get_test_point_set(self) -> list[dict[str, complex]]:
+        """Generate a list of variable binding dicts for the current target."""
+        vars_to_sample = self.target_vars
+        if not vars_to_sample:
+            vars_to_sample = ["x"]
+
+        point_sets = []
+        for _i, p in enumerate(self.test_points):
+            bindings = {}
+            for j, v in enumerate(vars_to_sample):
+                # Use a deterministic but varied shift for each dimension
+                # x uses p, y uses a shifted p, etc.
+                # Shift points slightly for higher dims to avoid identical inputs
+                # Using a prime-based scale ensures we sample across a broad region
+                scale = 1.1 + (j * 0.13)
+                offset = j * 0.071
+                bindings[v] = p * scale + offset
+            point_sets.append(bindings)
+        return point_sets
+
     def _calculate_mse(self, node: EMLNode) -> float:
         """Calculate Mean Squared Error against target points."""
+        point_sets = self._get_test_point_set()
         errors = []
-        for p in self.test_points:
+
+        for bindings in point_sets:
             try:
                 # Target value
-                target_val = self._evaluate_target(p)
+                target_val = self._evaluate_target(bindings)
                 if not np.isfinite(target_val):
                     continue
 
-                # EML value - provide defaults for common variables
-                # x is the primary test point
-                # y, z are alternative variables that might be in the tree
-                val = node.evaluate({"x": p, "y": p * 1.1 + 0.1, "z": p * 0.9 - 0.1})
+                # EML value - provide all current bindings
+                val = node.evaluate(bindings)
 
                 if not np.isfinite(val):
                     errors.append(1e6)  # Large penalty for NaN/Inf
@@ -262,7 +312,9 @@ class DiscoveryEngine:
             if f.get("name") and f.get("tree_json") and f.get("variables") is not None
         ]
         if not formulas:
-            raise ValueError("All candidate formulas were malformed (missing name/tree_json)")
+            raise ValueError(
+                "All candidate formulas were malformed (missing name/tree_json)"
+            )
 
         # Filter by complexity if requested
         if max_complexity is not None:
@@ -329,14 +381,21 @@ class DiscoveryEngine:
 
         Args:
             tree: The EMLNode to evaluate.
-            variables: Extra variable bindings (e.g. y=0.1).
+            variables: Optional specific variable bindings.
         """
-        outputs = []
-        # Use more diverse extra vars to distinguish bivariate better
-        extra_vars = variables or {"y": complex(0.42)}
-        for point in self.test_points:
+        if variables:
+            # Single evaluation mode
             try:
-                bindings = {"x": point, **extra_vars}
+                val = tree.evaluate(variables)
+                return [val] if cmath.isfinite(val) else None
+            except Exception:
+                return None
+
+        # Standard batch signature mode
+        point_sets = self._get_test_point_set()
+        outputs = []
+        for bindings in point_sets:
+            try:
                 val = tree.evaluate(bindings)
                 if not cmath.isfinite(val.real) or not cmath.isfinite(val.imag):
                     return None
@@ -352,9 +411,9 @@ class DiscoveryEngine:
         if not outputs or not targets or len(outputs) != len(targets):
             return float("inf")
         try:
-            mse = sum((abs(o - t) ** 2) for o, t in zip(outputs, targets, strict=False)) / len(
-                outputs
-            )
+            mse = sum(
+                (abs(o - t) ** 2) for o, t in zip(outputs, targets, strict=False)
+            ) / len(outputs)
             return mse
         except OverflowError:
             return float("inf")
@@ -363,7 +422,9 @@ class DiscoveryEngine:
         self, tree: EMLNode, check_outputs: list[complex] | None = None
     ) -> bool:
         """Check if a tree is mathematically stable and produces novel outputs."""
-        outputs = check_outputs if check_outputs is not None else self._eval_tree_safe(tree)
+        outputs = (
+            check_outputs if check_outputs is not None else self._eval_tree_safe(tree)
+        )
         if outputs is None:
             return False
 
@@ -428,7 +489,9 @@ class DiscoveryEngine:
             outputs = self._eval_tree_safe(tree)
 
             # Check stability: result must be finite and not absurdly large
-            if not outputs or not all(cmath.isfinite(o) and abs(o) < 1e10 for o in outputs):
+            if not outputs or not all(
+                cmath.isfinite(o) and abs(o) < 1e10 for o in outputs
+            ):
                 continue
 
             if tree and self.is_novel_and_stable(tree, check_outputs=outputs):
@@ -474,11 +537,15 @@ class DiscoveryEngine:
         candidates = []
         for _ in range(iterations):
             try:
-                tree, details = self.generate_random_composition(base_formulas=base_formulas)
+                tree, details = self.generate_random_composition(
+                    base_formulas=base_formulas
+                )
                 tree = simplify_tree(tree)
                 outputs = self._eval_tree_safe(tree)
 
-                if not outputs or not all(cmath.isfinite(o) and abs(o) < 1e10 for o in outputs):
+                if not outputs or not all(
+                    cmath.isfinite(o) and abs(o) < 1e10 for o in outputs
+                ):
                     continue
 
                 # Initial novelty check against current local state
@@ -556,7 +623,11 @@ class DiscoveryEngine:
                 pass
 
         else:  # Shrinkage (unwrap)
-            if target_node.node_type == NodeType.EML and target_node.left and target_node.right:
+            if (
+                target_node.node_type == NodeType.EML
+                and target_node.left
+                and target_node.right
+            ):
                 child = random.choice([target_node.left, target_node.right])
                 target_node.node_type = child.node_type
                 target_node.var_name = child.var_name
@@ -623,8 +694,9 @@ class DiscoveryEngine:
         tolerance: float = 1e-8,
         top_n: int = 3,
         stagnation_limit: int | None = 100,
-        progress_callback: Callable[[int, float | None, int | None, str | None], None]
-        | None = None,
+        progress_callback: (
+            Callable[[int, float | None, int | None, str | None], None] | None
+        ) = None,
         **_kwargs,
     ) -> dict[str, Any]:
         """
@@ -640,10 +712,23 @@ class DiscoveryEngine:
         """
         if isinstance(target, str):
             self.target_expression = target
-            self._evaluate_target_fn = lambda x: safe_eval_math(target, x)
+            # Detect variables
+            try:
+                tree = ast.parse(target, mode="eval")
+                detector = VarDetector()
+                detector.visit(tree)
+                self.target_vars = sorted(list(detector.variables))
+                if not self.target_vars:
+                    # Constant target, use x anyway for sampling
+                    self.target_vars = ["x"]
+            except Exception:
+                self.target_vars = ["x"]
+
+            self._evaluate_target_fn = lambda **vars: safe_eval_math(target, **vars)
         else:
             self.target_expression = "custom_evaluator"
             self._evaluate_target_fn = target
+            self.target_vars = ["x"]  # Default for opaque callable
 
         logger.info("Starting discovery for target: %s", self.target_expression)
 
@@ -687,7 +772,9 @@ class DiscoveryEngine:
 
         # Ensure we have some candidates
         if not candidates:
-            candidates.append({"tree": var("x"), "mse": 1e6, "ted": 99.0, "fitness": 1e-6})
+            candidates.append(
+                {"tree": var("x"), "mse": 1e6, "ted": 99.0, "fitness": 1e-6}
+            )
 
         # 3. Evolutionary Search Loop
         best_mse = float("inf")
@@ -708,7 +795,9 @@ class DiscoveryEngine:
             # still runs on the best-so-far.
             if progress_callback is not None:
                 try:
-                    progress_callback(i, current_best_mse, current_best_k, current_best_expr)
+                    progress_callback(
+                        i, current_best_mse, current_best_k, current_best_expr
+                    )
                 except DiscoveryCancelled as c:
                     cancelled_at = c.iteration if c.iteration >= 0 else i
                     logger.info(
@@ -734,7 +823,9 @@ class DiscoveryEngine:
 
             if stagnation_limit and stagnation_count >= stagnation_limit:
                 logger.info(
-                    "Stagnation reached at iteration %d. Best MSE: %.2e", i, current_best_mse
+                    "Stagnation reached at iteration %d. Best MSE: %.2e",
+                    i,
+                    current_best_mse,
                 )
                 break
 
@@ -788,7 +879,9 @@ class DiscoveryEngine:
 
             # Occasionally add a completely random tree to maintain diversity
             if i % 50 == 0:
-                random_tree = self.generate_random_composition(max_complexity=3, max_depth=2)[0]
+                random_tree = self.generate_random_composition(
+                    max_complexity=3, max_depth=2
+                )[0]
                 candidates.append(
                     {
                         "tree": random_tree,
@@ -819,7 +912,9 @@ class DiscoveryEngine:
                     "mse": c["mse"],
                     "k": c["simplified_tree"].node_count,
                     "k_before_simplify": c["tree"].node_count,
-                    "details": "Existing Seed" if c.get("name") else "Mutational variant",
+                    "details": (
+                        "Existing Seed" if c.get("name") else "Mutational variant"
+                    ),
                     "ted": c.get("ted"),
                 }
                 for idx, c in enumerate(candidates[:top_n])

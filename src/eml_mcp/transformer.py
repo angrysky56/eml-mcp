@@ -12,7 +12,6 @@ supports hybrid learnable weights.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import torch
 import torch.nn as nn
@@ -79,10 +78,14 @@ class EMLCompiledFFN(nn.Module):
         simplified_trees = [simplify_tree(t) for t in expanded_trees]
 
         self.root_indices_list = [self._linearize(t) for t in simplified_trees]
-        self.register_buffer("root_indices", torch.tensor(self.root_indices_list, dtype=torch.long))
+        self.register_buffer(
+            "root_indices", torch.tensor(self.root_indices_list, dtype=torch.long)
+        )
 
         self.num_nodes = len(self.unique_nodes)
-        self.node_to_idx = {expr: data["index"] for expr, data in self.unique_nodes.items()}
+        self.node_to_idx = {
+            expr: data["index"] for expr, data in self.unique_nodes.items()
+        }
 
         # 2. Build constants buffer
         self._setup_constants()
@@ -102,7 +105,6 @@ class EMLCompiledFFN(nn.Module):
             nodes = depth_groups[d]
             stage = EMLStage(
                 nodes=nodes,
-                node_to_idx=self.node_to_idx,
                 eps=self.eps,
                 complex_mode=self.complex_mode,
                 learnable=self.learnable,
@@ -193,8 +195,12 @@ class EMLCompiledFFN(nn.Module):
                 const_indices.append(leaf["index"])
                 const_values.append(val)
 
-        self.register_buffer("const_indices", torch.tensor(const_indices, dtype=torch.long))
-        self.register_buffer("const_values", torch.tensor(const_values, dtype=self.dtype))
+        self.register_buffer(
+            "const_indices", torch.tensor(const_indices, dtype=torch.long)
+        )
+        self.register_buffer(
+            "const_values", torch.tensor(const_values, dtype=self.dtype)
+        )
 
         # Variable mapping: which tape index corresponds to which input variable
         var_indices = []
@@ -205,15 +211,19 @@ class EMLCompiledFFN(nn.Module):
                 var_input_indices.append(self.var_to_input_idx[leaf["name"]])
 
         self.register_buffer("var_indices", torch.tensor(var_indices, dtype=torch.long))
-        self.register_buffer("var_input_indices", torch.tensor(var_input_indices, dtype=torch.long))
+        self.register_buffer(
+            "var_input_indices", torch.tensor(var_input_indices, dtype=torch.long)
+        )
 
         # Initial forward pass to warm up or compile
         if hasattr(torch, "compile") and getattr(self, "compile_model", False):
             try:
                 # We compile the main forward logic
                 # 'reduce-overhead' is good for small models like ours
-                self._compiled_run = torch.compile(self._run_forward, mode="reduce-overhead")
-            except Exception:
+                self._compiled_run = torch.compile(
+                    self._run_forward, mode="reduce-overhead"
+                )
+            except Exception:  # noqa: BLE001
                 self._compiled_run = self._run_forward
         else:
             self._compiled_run = self._run_forward
@@ -266,23 +276,25 @@ class EMLCompiledFFN(nn.Module):
                     if val.imag == 0:
                         val = val.real
                 node = EMLNode(NodeType.CONST, value=val)
-                node._tape_idx = idx
+                node.tape_idx = idx
                 return node
             elif idx in self.var_indices:
                 idx_pos = (self.var_indices == idx).nonzero(as_tuple=True)[0].item()
                 input_idx = self.var_input_indices[idx_pos].item()
                 node = EMLNode(NodeType.VAR, var_name=self.variable_names[input_idx])
-                node._tape_idx = idx
+                node.tape_idx = idx
                 return node
             else:
                 for stage in self.stages:
                     if idx in stage.out_indices:
-                        idx_pos = (stage.out_indices == idx).nonzero(as_tuple=True)[0].item()
+                        idx_pos = (
+                            (stage.out_indices == idx).nonzero(as_tuple=True)[0].item()
+                        )
                         if self.learnable:
-                            We = stage.fixed_W_e[idx_pos] + stage.delta_W_e[idx_pos]
-                            Wl = stage.fixed_W_l[idx_pos] + stage.delta_W_l[idx_pos]
-                            left_idx = We.abs().argmax().item()
-                            right_idx = Wl.abs().argmax().item()
+                            w_e = stage.fixed_w_e[idx_pos] + stage.delta_w_e[idx_pos]
+                            w_l = stage.fixed_w_l[idx_pos] + stage.delta_w_l[idx_pos]
+                            left_idx = w_e.abs().argmax().item()
+                            right_idx = w_l.abs().argmax().item()
                         else:
                             left_idx = stage.left_indices[idx_pos].item()
                             right_idx = stage.right_indices[idx_pos].item()
@@ -291,7 +303,7 @@ class EMLCompiledFFN(nn.Module):
                             left=build_node(left_idx),
                             right=build_node(right_idx),
                         )
-                        node._tape_idx = idx
+                        node.tape_idx = idx
                         return node
                 raise ValueError(f"Index {idx} not found in nodes.")
 
@@ -317,7 +329,7 @@ class EMLCompiledFFN(nn.Module):
         return list(all_indices - kept_indices)
 
     def apply_symbolic_pruning(self):
-        """Zero-out weights connected to heads strictly classified outside the optimal topological selection."""
+        """Zero-out weights for heads outside the optimal topological selection."""
         if not self.learnable:
             return
 
@@ -363,7 +375,9 @@ class EMLCompiledFFN(nn.Module):
             return -1
 
         with torch.no_grad():
-            for i, (orig_tree, simp_tree) in enumerate(zip(etrees, simplified)):
+            for i, (_orig_tree, simp_tree) in enumerate(
+                zip(etrees, simplified, strict=False)
+            ):
                 r_idx = self.root_indices[i].item()
                 rewire(simp_tree, r_idx)
                 kept_indices.add(r_idx)
@@ -389,7 +403,6 @@ class EMLStage(nn.Module):
     def __init__(
         self,
         nodes: list[dict],
-        node_to_idx: dict[str, int],
         eps: float = 1e-12,
         complex_mode: bool = False,
         learnable: bool = False,
@@ -408,8 +421,12 @@ class EMLStage(nn.Module):
         right_indices = [n["right_idx"] for n in nodes]
 
         self.register_buffer("out_indices", torch.tensor(out_indices, dtype=torch.long))
-        self.register_buffer("left_indices", torch.tensor(left_indices, dtype=torch.long))
-        self.register_buffer("right_indices", torch.tensor(right_indices, dtype=torch.long))
+        self.register_buffer(
+            "left_indices", torch.tensor(left_indices, dtype=torch.long)
+        )
+        self.register_buffer(
+            "right_indices", torch.tensor(right_indices, dtype=torch.long)
+        )
 
         # Weights for selection
         # We use a custom parameter approach for hybrid learning
@@ -424,77 +441,72 @@ class EMLStage(nn.Module):
 
             # For each output node in this stage, we have a dense weight vector
             # of size num_nodes.
-            self.delta_W_e = nn.Parameter(torch.zeros(len(nodes), num_nodes, dtype=dtype))
-            self.delta_W_l = nn.Parameter(torch.zeros(len(nodes), num_nodes, dtype=dtype))
+            self.delta_w_e = nn.Parameter(
+                torch.zeros(len(nodes), num_nodes, dtype=dtype)
+            )
+            self.delta_w_l = nn.Parameter(
+                torch.zeros(len(nodes), num_nodes, dtype=dtype)
+            )
             self.bias_e = nn.Parameter(torch.zeros(len(nodes), dtype=dtype))
             self.bias_l = nn.Parameter(torch.zeros(len(nodes), dtype=dtype))
 
-            # Sparse fixed selection (mapped to dense during forward for simplicity)
-            # In a production version, we'd use sparse matrices.
-            fixed_W_e = torch.zeros(len(nodes), num_nodes, dtype=dtype)
-            fixed_W_l = torch.zeros(len(nodes), num_nodes, dtype=dtype)
+            # Sparse fixed selection
+            fixed_w_e = torch.zeros(len(nodes), num_nodes, dtype=dtype)
+            fixed_w_l = torch.zeros(len(nodes), num_nodes, dtype=dtype)
             for i in range(len(nodes)):
-                fixed_W_e[i, left_indices[i]] = 1.0
-                fixed_W_l[i, right_indices[i]] = 1.0
-            self.register_buffer("fixed_W_e", fixed_W_e)
-            self.register_buffer("fixed_W_l", fixed_W_l)
+                fixed_w_e[i, left_indices[i]] = 1.0
+                fixed_w_l[i, right_indices[i]] = 1.0
+            self.register_buffer("fixed_w_e", fixed_w_e)
+            self.register_buffer("fixed_w_l", fixed_w_l)
 
     def forward(self, tape: Tensor) -> Tensor:
+        """Forward pass for this stage."""
         # 1. Select inputs for this stage
         if self.learnable:
             # W = fixed + delta
-            We = self.fixed_W_e + self.delta_W_e
-            Wl = self.fixed_W_l + self.delta_W_l
+            w_e = self.fixed_w_e + self.delta_w_e
+            w_l = self.fixed_w_l + self.delta_w_l
 
-            # Vectorized projection: (B, N) @ (N, M)^T -> (B, M)
-            # PyTorch's @ (matmul) handles batching: (..., N) @ (N, K) -> (..., K)
-            # We need (tape, We.T)
-            L = tape @ We.T + self.bias_e
-            R = tape @ Wl.T + self.bias_l
+            # Vectorized projection
+            l_val = tape @ w_e.T + self.bias_e
+            r_val = tape @ w_l.T + self.bias_l
         else:
             # Efficient indexing for fixed mode
-            L = tape[..., self.left_indices]
-            R = tape[..., self.right_indices]
+            l_val = tape[..., self.left_indices]
+            r_val = tape[..., self.right_indices]
 
         # 2. Compute EML operation
-        # Apply numerical guardrails to prevent INF/NAN
-        # For float32, exp(88) is ~1e38 (overflow)
-        # For float64, exp(709) is ~1e308
         if tape.dtype == torch.float32:
             max_exp = 88.0
         else:
             max_exp = 709.0
 
-        L_safe = torch.clamp(L.real, max=max_exp)
-        if L.is_complex():
-            L_safe = torch.complex(L_safe, L.imag)
+        l_safe = torch.clamp(l_val.real, max=max_exp)
+        if l_val.is_complex():
+            l_safe = torch.complex(l_safe, l_val.imag)
 
         # native exp
-        exp_l = torch.exp(L_safe)
+        exp_l = torch.exp(l_safe)
 
         if self.complex_mode:
-            # Principal branch of log(z) = log(|z|) + i*arg(z)
-            # torch.log already handles this correctly for complex128.
-            # We just need to ensure R != 0.
-            R_safe = R
-            # Tiny epsilon shift for stability at singularity
-            mask = R == 0
+            r_safe = r_val
+            mask = r_val == 0
             if mask.any():
-                R_safe = torch.where(mask, torch.full_like(R, self.eps), R)
-            ln_r = torch.log(R_safe)
+                r_safe = torch.where(mask, torch.full_like(r_val, self.eps), r_val)
+            ln_r = torch.log(r_safe)
         else:
             # Real mode: log(|R| + eps)
-            ln_r = torch.log(torch.abs(R) + self.eps)
+            ln_r = torch.log(torch.abs(r_val) + self.eps)
 
-        V = exp_l - ln_r
+        v_res = exp_l - ln_r
 
         # 3. Update tape
         # To maintain differentiability, we must use clone() if grad is enabled.
         # However, if not training, we can update in-place for performance.
         if not torch.is_grad_enabled():
-            tape[..., self.out_indices] = V
+            tape[..., self.out_indices] = v_res
             return tape
 
         new_tape = tape.clone()
-        new_tape[..., self.out_indices] = V
+        new_tape[..., self.out_indices] = v_res
         return new_tape

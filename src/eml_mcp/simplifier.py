@@ -7,10 +7,10 @@ tree complexity (node count K). This uses an Equality Graph to find the globally
 simplest equivalent tree.
 """
 
-import collections
-import math
 import cmath
+import collections
 from typing import Any
+
 from eml_mcp.primitives import _safe_exp, _safe_log
 from eml_mcp.trees import EMLNode, NodeType, const, eml_node, var
 
@@ -29,6 +29,8 @@ RULES = [
 
 
 class EGraph:
+    """A compact e-graph for EML symbolic simplification."""
+
     def __init__(self):
         self.union_find = {}
         self.classes = collections.defaultdict(set)
@@ -36,6 +38,7 @@ class EGraph:
         self.next_id = 0
 
     def find(self, i: int) -> int:
+        """Find the canonical representative of an e-class ID."""
         if i not in self.union_find:
             return i
         if self.union_find[i] == i:
@@ -44,23 +47,24 @@ class EGraph:
         return self.union_find[i]
 
     def add(self, enode: tuple) -> int:
+        """Add an e-node to the e-graph and return its e-class ID."""
         if enode[0] == "eml":
             enode = ("eml", self.find(enode[1]), self.find(enode[2]))
         elif enode[0] == "call":
             enode = ("call", enode[1], tuple((k, self.find(v)) for k, v in enode[2]))
         elif enode[0] == "const":
-            for existing_enode in self.hashcons:
+            for existing_enode, eid in self.hashcons.items():
                 if existing_enode[0] == "const":
                     try:
                         diff = existing_enode[1] - enode[1]
                         if not cmath.isnan(diff):
                             if abs(diff) < 1e-15:
-                                return self.find(self.hashcons[existing_enode])
+                                return self.find(eid)
                         else:
                             if str(existing_enode[1]) == str(enode[1]):
-                                return self.find(self.hashcons[existing_enode])
-                    except Exception:
-                        pass
+                                return self.find(eid)
+                    except (ArithmeticError, ValueError, TypeError):
+                        continue
 
         if enode in self.hashcons:
             return self.find(self.hashcons[enode])
@@ -73,6 +77,7 @@ class EGraph:
         return i
 
     def merge(self, i: int, j: int) -> int:
+        """Merge two e-classes and trigger congruence closure."""
         root_i = self.find(i)
         root_j = self.find(j)
         if root_i == root_j:
@@ -93,7 +98,11 @@ class EGraph:
                 if enode[0] == "eml":
                     new_enode = ("eml", self.find(enode[1]), self.find(enode[2]))
                 elif enode[0] == "call":
-                    new_enode = ("call", enode[1], tuple((k, self.find(v)) for k, v in enode[2]))
+                    new_enode = (
+                        "call",
+                        enode[1],
+                        tuple((k, self.find(v)) for k, v in enode[2]),
+                    )
 
                 if new_enode in new_hashcons:
                     other_eclass = new_hashcons[new_enode]
@@ -111,6 +120,7 @@ class EGraph:
         return root_i
 
     def insert_tree(self, node: EMLNode) -> int:
+        """Recursively insert an EMLNode tree into the e-graph."""
         if node.node_type == NodeType.CONST:
             return self.add(("const", node.value))
         elif node.node_type == NodeType.VAR:
@@ -130,7 +140,10 @@ class EGraph:
             raise ValueError(f"Unsupported node type for e-graph: {node.node_type}")
 
 
-def egraph_matches(egraph: EGraph, eclass_id: int, pattern: Any) -> list[dict[str, int]]:
+def egraph_matches(
+    egraph: EGraph, eclass_id: int, pattern: Any
+) -> list[dict[str, int]]:
+    """Search for pattern matches within an e-class."""
     if isinstance(pattern, str) and pattern.startswith("?"):
         return [{pattern: egraph.find(eclass_id)}]
 
@@ -143,8 +156,8 @@ def egraph_matches(egraph: EGraph, eclass_id: int, pattern: Any) -> list[dict[st
                 try:
                     if not cmath.isnan(enode[1]) and abs(enode[1] - 1.0) < 1e-15:
                         matches.append({})
-                except Exception:
-                    pass
+                except (ArithmeticError, ValueError, TypeError):
+                    continue
         elif pattern[0] == "eml" and enode[0] == "eml":
             left_matches = egraph_matches(egraph, enode[1], pattern[1])
             if not left_matches:
@@ -168,14 +181,19 @@ def egraph_matches(egraph: EGraph, eclass_id: int, pattern: Any) -> list[dict[st
 
 
 def run_rewrites(egraph: EGraph) -> bool:
+    """Run constant folding and pattern-based rewrites on the e-graph."""
     changed = False
 
     # 1. Constant folding
     for eclass_id, enodes in list(egraph.classes.items()):
         for enode in list(enodes):
             if enode[0] == "eml":
-                l_consts = [n for n in egraph.classes[egraph.find(enode[1])] if n[0] == "const"]
-                r_consts = [n for n in egraph.classes[egraph.find(enode[2])] if n[0] == "const"]
+                l_consts = [
+                    n for n in egraph.classes[egraph.find(enode[1])] if n[0] == "const"
+                ]
+                r_consts = [
+                    n for n in egraph.classes[egraph.find(enode[2])] if n[0] == "const"
+                ]
                 if l_consts and r_consts:
                     v1 = l_consts[0][1]
                     v2 = r_consts[0][1]
@@ -185,8 +203,8 @@ def run_rewrites(egraph: EGraph) -> bool:
                         if egraph.find(eclass_id) != egraph.find(new_id):
                             egraph.merge(eclass_id, new_id)
                             changed = True
-                    except Exception:
-                        pass
+                    except (ArithmeticError, ValueError, TypeError):
+                        continue
 
     # 2. Pattern rules
     for lhs, rhs in RULES:
@@ -202,6 +220,7 @@ def run_rewrites(egraph: EGraph) -> bool:
 
 
 def extract_best(egraph: EGraph, root_id: int) -> EMLNode:
+    """Extract the simplest EML tree from the e-graph using a greedy cost model."""
     costs = {}
 
     changed = True
@@ -219,7 +238,9 @@ def extract_best(egraph: EGraph, root_id: int) -> EMLNode:
                         cost = 1 + costs[c_left][0] + costs[c_right][0]
                 elif enode[0] == "call":
                     args_costs = [
-                        costs[egraph.find(v)][0] for _, v in enode[2] if egraph.find(v) in costs
+                        costs[egraph.find(v)][0]
+                        for _, v in enode[2]
+                        if egraph.find(v) in costs
                     ]
                     if len(args_costs) == len(enode[2]):
                         cost = 1 + sum(args_costs)
@@ -247,7 +268,12 @@ def extract_best(egraph: EGraph, root_id: int) -> EMLNode:
 
 def simplify_tree(node: EMLNode) -> EMLNode:
     """Simplify an EML tree using Equality Saturation."""
-    if node.node_type not in (NodeType.EML, NodeType.CONST, NodeType.VAR, NodeType.CALL):
+    if node.node_type not in (
+        NodeType.EML,
+        NodeType.CONST,
+        NodeType.VAR,
+        NodeType.CALL,
+    ):
         return node.copy()
 
     egraph = EGraph()
@@ -264,7 +290,10 @@ def simplify_tree(node: EMLNode) -> EMLNode:
 def get_exp_input(node: EMLNode) -> EMLNode | None:
     """Check if node is exp(z) = eml(z, 1) and return z."""
     if node.node_type == NodeType.EML:
-        if node.right.node_type == NodeType.CONST and abs(node.right.value - 1.0) < 1e-15:
+        if (
+            node.right.node_type == NodeType.CONST
+            and abs(node.right.value - 1.0) < 1e-15
+        ):
             return node.left
     return None
 
@@ -273,19 +302,26 @@ def get_ln_input(node: EMLNode) -> EMLNode | None:
     """Check if node is ln(z) = eml(1, eml(eml(1, z), 1)) and return z."""
     if node.node_type != NodeType.EML:
         return None
-    if not (node.left.node_type == NodeType.CONST and abs(node.left.value - 1.0) < 1e-15):
+    if not (
+        node.left.node_type == NodeType.CONST and abs(node.left.value - 1.0) < 1e-15
+    ):
         return None
 
     middle = node.right
     if middle.node_type != NodeType.EML:
         return None
-    if not (middle.right.node_type == NodeType.CONST and abs(middle.right.value - 1.0) < 1e-15):
+    if not (
+        middle.right.node_type == NodeType.CONST
+        and abs(middle.right.value - 1.0) < 1e-15
+    ):
         return None
 
     inner = middle.left
     if inner.node_type != NodeType.EML:
         return None
-    if not (inner.left.node_type == NodeType.CONST and abs(inner.left.value - 1.0) < 1e-15):
+    if not (
+        inner.left.node_type == NodeType.CONST and abs(inner.left.value - 1.0) < 1e-15
+    ):
         return None
 
     return inner.right
